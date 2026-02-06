@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Face Inpainting</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="header-brand">
+      <h1>Face Inpainting</h1>
+      <span class="header-sub">YOLOv5 Detection &middot; Stable Diffusion</span>
+    </div>
+    <div class="header-status">
+      <div class="status-chip loading" id="chip-yolo">
+        <span class="status-dot"></span>
+        <span>Detection</span>
+      </div>
+      <div class="status-chip loading" id="chip-inpaint">
+        <span class="status-dot"></span>
+        <span>Inpainting</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="model-banner" id="model-banner">
+    <div class="banner-spinner"></div>
+    <div class="banner-text">
+      <strong>Inpainting model loading</strong>
+      <span id="banner-detail">Starting up...</span>
+    </div>
+  </div>
+
+  <main>
+    <!-- Row 1: Camera controls -->
+    <div class="toolbar">
+      <div class="toolbar-group">
+        <select id="cam-select"><option value="">Select camera</option></select>
+        <button id="btn-cam" class="btn-secondary">Start Webcam</button>
+      </div>
+      <span class="toolbar-status" id="status-text">Webcam off</span>
+    </div>
+
+    <!-- Row 2: Detection + Mask side by side -->
+    <div class="panels-top">
+      <div class="panel">
+        <div class="panel-header">
+          <h2>Detection</h2>
+          <span class="panel-info" id="info-detect">No data</span>
+        </div>
+        <div class="canvas-wrap">
+          <canvas id="canvas-detect" width="640" height="480"></canvas>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-header">
+          <h2>Mask Preview</h2>
+        </div>
+        <div class="canvas-wrap">
+          <canvas id="canvas-mask" width="640" height="480"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Row 3: Prompt bar -->
+    <div class="prompt-section">
+      <div class="prompt-bar">
+        <button id="btn-capture" class="btn-secondary" disabled>Capture Frame</button>
+        <input type="text" id="input-prompt" placeholder='Enter a prompt, e.g. "astronaut on the moon"' />
+        <button id="btn-generate" disabled>Model Loading...</button>
+      </div>
+      <div class="progress-wrap" id="progress-container" hidden>
+        <div class="progress-track">
+          <div class="progress-fill" id="progress-bar"></div>
+        </div>
+        <span class="progress-label" id="progress-text">0%</span>
+      </div>
+    </div>
+
+    <!-- Row 4: Generated result (full width, larger) -->
+    <div class="result-section" id="result-section" hidden>
+      <div class="panel panel-result">
+        <div class="panel-header">
+          <h2 id="result-label">Generated</h2>
+          <button id="btn-download" class="btn-secondary btn-small" disabled>Download</button>
+        </div>
+        <div class="canvas-wrap">
+          <canvas id="canvas-result" width="512" height="512"></canvas>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Hidden video element for getUserMedia -->
+  <video id="webcam-video" autoplay playsinline style="display:none"></video>
+  <!-- Hidden canvas for capturing frames -->
+  <canvas id="capture-canvas" style="display:none"></canvas>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+# Web server
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+websockets>=12.0
+
+# Computer vision (headless — no GUI needed on server)
+opencv-python-headless>=4.8.0
+
+# ML inference
+torch>=2.2.0
+torchvision>=0.17.0
+
+# Inpainting (replaces openai)
+diffusers>=0.25.0
+transformers>=4.36.0
+accelerate>=0.25.0
+safetensors>=0.4.0
+
+# Image processing
+numpy>=1.26.0,<2.0
+Pillow>=10.0.0
+scikit-image>=0.22.0
+
+# YOLOv5 dependencies
+pyyaml
+matplotlib
+pandas
+seaborn
+thop
