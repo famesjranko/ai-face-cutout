@@ -195,6 +195,11 @@ main {
   gap: 0.5rem;
 }
 
+.toolbar-group + .toolbar-group {
+  padding-left: 0.75rem;
+  border-left: 1px solid var(--border);
+}
+
 .toolbar-status {
   font-size: 0.78rem;
   color: var(--text-muted);

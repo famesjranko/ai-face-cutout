@@ -5,6 +5,7 @@ services:
       - "8000:8000"
     volumes:
       - hf-cache:/root/.cache/huggingface
+      - ultralytics-cache:/root/.config/Ultralytics
     environment:
       - DEVICE=cpu
       - INPAINT_STEPS=8
@@ -12,3 +13,4 @@ services:
 
 volumes:
   hf-cache:
+  ultralytics-cache:

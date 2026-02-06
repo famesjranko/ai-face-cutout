@@ -7,18 +7,16 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Dict, Optional
 
 import cv2
 import numpy as np
-import torch
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from PIL import Image
 
 from server.config import settings
-from server.detection import load_model, detect_frame
+from server.detectors import FaceBiSeNetDetector, YOLOv8SegDetector, BaseDetector
 from server.masking import create_mask_preview, create_inpaint_inputs
 from server.inpainting import InpaintingEngine
 
@@ -27,12 +25,13 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class AppState:
-    model: Optional[torch.nn.Module] = None
+    detectors: Dict[str, BaseDetector] = field(default_factory=dict)
+    detector_lock: threading.Lock = field(default_factory=threading.Lock)
     inpaint_engine: Optional[InpaintingEngine] = None
     latest_frame: Optional[np.ndarray] = None
-    latest_detections: Optional[torch.Tensor] = None
+    latest_mask: Optional[np.ndarray] = None
     captured_frame: Optional[np.ndarray] = None
-    captured_detections: Optional[torch.Tensor] = None
+    captured_mask: Optional[np.ndarray] = None
     lock: threading.Lock = field(default_factory=threading.Lock)
     inpaint_status: str = "loading"
     inpaint_status_detail: str = "Starting up..."
@@ -63,22 +62,62 @@ def _load_inpaint_model():
         logger.exception("Failed to load inpainting model")
 
 
+def _prewarm_face_detector():
+    """Pre-load the face detector in a background thread."""
+    try:
+        get_detector_sync("face")
+    except Exception:
+        logger.exception("Failed to pre-warm face detector")
+
+
+def get_detector_sync(mode: str, target_classes=None) -> BaseDetector:
+    """Get or create a detector by mode name (thread-safe, lazy-loading)."""
+    with state.detector_lock:
+        if mode == "face":
+            if "face" not in state.detectors:
+                det = FaceBiSeNetDetector(
+                    yolo_weights=settings.WEIGHTS_PATH,
+                    bisenet_weights=settings.BISENET_WEIGHTS_PATH,
+                    device=settings.DEVICE,
+                    img_size=settings.IMG_SIZE,
+                )
+                det.load()
+                state.detectors["face"] = det
+            return state.detectors["face"]
+
+        elif mode == "object":
+            if "object" not in state.detectors:
+                det = YOLOv8SegDetector(
+                    model_variant=settings.YOLOV8_SEG_MODEL,
+                    device=settings.DEVICE,
+                    target_classes=target_classes or [0],
+                )
+                det.load()
+                state.detectors["object"] = det
+            else:
+                # Update target classes if the detector already exists.
+                if target_classes is not None:
+                    state.detectors["object"].set_target_classes(target_classes)
+            return state.detectors["object"]
+
+        else:
+            raise ValueError(f"Unknown detection mode: {mode}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: load YOLOv5 model (fast, <2s)
-    logger.info("Loading YOLOv5 face model...")
-    state.model = load_model(settings.WEIGHTS_PATH, settings.DEVICE)
-    logger.info("YOLOv5 model loaded.")
+    # Pre-warm face detector in background (replaces eager YOLOv5 load).
+    logger.info("Pre-warming face detector in background...")
+    threading.Thread(target=_prewarm_face_detector, daemon=True).start()
 
-    # Load SD inpainting model in background so server starts immediately
+    # Load SD inpainting model in background so server starts immediately.
     logger.info("Loading inpainting model in background (may take minutes on first run)...")
-    bg = threading.Thread(target=_load_inpaint_model, daemon=True)
-    bg.start()
+    threading.Thread(target=_load_inpaint_model, daemon=True).start()
 
     yield  # App is running
 
     # Shutdown
-    state.model = None
+    state.detectors.clear()
     state.inpaint_engine = None
 
 
@@ -90,39 +129,66 @@ def _encode_frame_jpeg(frame_bgr: np.ndarray, quality: int = 80) -> str:
     return base64.b64encode(buf.tobytes()).decode("ascii")
 
 
+def _parse_detect_params(query_string: str):
+    """Parse mode and classes from WebSocket query string."""
+    from urllib.parse import parse_qs
+    params = parse_qs(query_string)
+    mode = params.get("mode", [settings.DEFAULT_DETECTION_MODE])[0]
+    classes_str = params.get("classes", ["0"])[0]
+    try:
+        target_classes = [int(c) for c in classes_str.split(",") if c.strip()]
+    except ValueError:
+        target_classes = [0]
+    return mode, target_classes
+
+
 @app.websocket("/ws/detect")
 async def ws_detect(ws: WebSocket):
     await ws.accept()
+
+    # Parse mode from query params.
+    query = ws.scope.get("query_string", b"").decode("utf-8")
+    mode, target_classes = _parse_detect_params(query)
+
+    # Lazy-load the requested detector (may block on first use).
+    loop = asyncio.get_event_loop()
+    try:
+        detector = await loop.run_in_executor(
+            None, get_detector_sync, mode, target_classes
+        )
+    except Exception as exc:
+        await ws.send_text(json.dumps({"error": f"Failed to load detector: {exc}"}))
+        await ws.close()
+        return
+
     try:
         while True:
-            # Receive JPEG bytes from browser
+            # Receive JPEG bytes from browser.
             data = await ws.receive_bytes()
             arr = np.frombuffer(data, dtype=np.uint8)
             frame_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
             if frame_bgr is None:
                 continue
 
-            # Run detection
-            loop = asyncio.get_event_loop()
-            annotated, det = await loop.run_in_executor(
-                None, detect_frame, state.model, frame_bgr, settings.IMG_SIZE, settings.DEVICE
-            )
+            # Run detection.
+            result = await loop.run_in_executor(None, detector.detect, frame_bgr)
 
-            # Store latest frame + detections for inpainting
+            # Store latest frame + mask for inpainting.
             with state.lock:
                 state.latest_frame = frame_bgr.copy()
-                state.latest_detections = det.clone() if len(det) else det
+                state.latest_mask = result.mask.copy()
 
-            # Build mask preview
+            # Build mask preview.
             mask_preview = await loop.run_in_executor(
-                None, create_mask_preview, frame_bgr, det
+                None, create_mask_preview, frame_bgr, result.mask
             )
 
-            # Send back annotated + mask as base64 JPEG
+            # Send back annotated + mask as base64 JPEG.
             resp = {
-                "detect": _encode_frame_jpeg(annotated),
+                "detect": _encode_frame_jpeg(result.annotated_frame),
                 "mask": _encode_frame_jpeg(mask_preview),
-                "faces": len(det),
+                "count": result.count,
+                "label": result.label,
             }
             await ws.send_text(json.dumps(resp))
     except WebSocketDisconnect:
@@ -146,23 +212,23 @@ async def ws_inpaint(ws: WebSocket):
                 await ws.send_text(json.dumps({"error": "Inpainting model still loading, please wait..."}))
                 continue
 
-            # Use the explicitly captured frame
+            # Use the explicitly captured frame.
             with state.lock:
                 frame = state.captured_frame
-                det = state.captured_detections
+                mask = state.captured_mask
 
             if frame is None:
                 await ws.send_text(json.dumps({"error": "No frame captured. Click Capture first."}))
                 continue
 
-            if det is None or len(det) == 0:
-                await ws.send_text(json.dumps({"error": "No face detected in captured frame"}))
+            if mask is None or mask.max() == 0:
+                await ws.send_text(json.dumps({"error": "No detection in captured frame"}))
                 continue
 
-            # Prepare inpainting inputs
+            # Prepare inpainting inputs.
             loop = asyncio.get_event_loop()
             inputs = await loop.run_in_executor(
-                None, create_inpaint_inputs, frame, det
+                None, create_inpaint_inputs, frame, mask
             )
             if inputs is None:
                 await ws.send_text(json.dumps({"error": "Failed to create mask"}))
@@ -177,24 +243,22 @@ async def ws_inpaint(ws: WebSocket):
 
             start_time = time.time()
 
-            # Progress callback sends updates over WebSocket
-            # We need to use a thread-safe queue since the callback runs in the executor
+            # Progress callback sends updates over WebSocket.
             progress_queue: asyncio.Queue = asyncio.Queue()
 
             def on_progress(step: int, total: int):
                 elapsed = time.time() - start_time
-                # Put into queue (thread-safe via asyncio)
                 loop.call_soon_threadsafe(
                     progress_queue.put_nowait,
                     {"status": "progress", "step": step, "total_steps": total, "elapsed": round(elapsed, 1)},
                 )
 
-            # Run generation in executor
+            # Run generation in executor.
             gen_task = loop.run_in_executor(
                 None, state.inpaint_engine.generate, image_pil, mask_pil, prompt, on_progress
             )
 
-            # Send progress updates while waiting for generation
+            # Send progress updates while waiting for generation.
             while not gen_task.done():
                 try:
                     progress_msg = await asyncio.wait_for(progress_queue.get(), timeout=0.5)
@@ -204,12 +268,12 @@ async def ws_inpaint(ws: WebSocket):
 
             result_image = await gen_task
 
-            # Drain remaining progress messages
+            # Drain remaining progress messages.
             while not progress_queue.empty():
                 progress_msg = progress_queue.get_nowait()
                 await ws.send_text(json.dumps(progress_msg))
 
-            # Encode result as base64 JPEG
+            # Encode result as base64 JPEG.
             buf = io.BytesIO()
             result_image.save(buf, format="JPEG", quality=90)
             result_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
@@ -227,8 +291,10 @@ async def ws_inpaint(ws: WebSocket):
 
 @app.get("/api/status")
 async def api_status():
+    loaded = {name: det.is_loaded for name, det in state.detectors.items()}
     return JSONResponse({
-        "yolo": "ready" if state.model is not None else "loading",
+        "detectors": loaded,
+        "detection": "ready" if any(loaded.values()) else "loading",
         "inpaint": state.inpaint_status,
         "inpaint_detail": state.inpaint_status_detail,
     })
@@ -236,29 +302,27 @@ async def api_status():
 
 @app.post("/api/capture")
 async def api_capture():
-    """Freeze the current frame + detections for inpainting."""
+    """Freeze the current frame + mask for inpainting."""
     with state.lock:
         if state.latest_frame is None:
             return JSONResponse({"error": "No frame available"}, status_code=400)
         state.captured_frame = state.latest_frame.copy()
-        det = state.latest_detections
-        state.captured_detections = (
-            det.clone() if det is not None and len(det) else det
-        )
-        faces = len(det) if det is not None else 0
+        mask = state.latest_mask
+        state.captured_mask = mask.copy() if mask is not None else None
+        count = int(mask.max() > 0) if mask is not None else 0
 
-    # Build mask preview of the captured frame for the client
+    # Build mask preview of the captured frame for the client.
     loop = asyncio.get_event_loop()
-    if state.captured_detections is not None and len(state.captured_detections):
+    if state.captured_mask is not None and state.captured_mask.max() > 0:
         mask_preview = await loop.run_in_executor(
-            None, create_mask_preview, state.captured_frame, state.captured_detections
+            None, create_mask_preview, state.captured_frame, state.captured_mask
         )
     else:
         mask_preview = state.captured_frame.copy()
 
     return JSONResponse({
         "ok": True,
-        "faces": faces,
+        "count": count,
         "mask": _encode_frame_jpeg(mask_preview),
     })
 

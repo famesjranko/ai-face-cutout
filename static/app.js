@@ -7,7 +7,10 @@
   var btnGen = document.getElementById("btn-generate");
   var btnDownload = document.getElementById("btn-download");
   var camSelect = document.getElementById("cam-select");
+  var modeSelect = document.getElementById("mode-select");
+  var classSelect = document.getElementById("class-select");
   var statusText = document.getElementById("status-text");
+  var headerSub = document.getElementById("header-sub");
   var inputPrompt = document.getElementById("input-prompt");
   var infoDetect = document.getElementById("info-detect");
   var resultLabel = document.getElementById("result-label");
@@ -28,7 +31,7 @@
   var captureCtx = captureCanvas.getContext("2d");
 
   // Status elements
-  var chipYolo = document.getElementById("chip-yolo");
+  var chipDetect = document.getElementById("chip-detect");
   var chipInpaint = document.getElementById("chip-inpaint");
   var modelBanner = document.getElementById("model-banner");
   var bannerDetail = document.getElementById("banner-detail");
@@ -43,6 +46,12 @@
   var isGenerating = false;
   var frameCaptured = false;
   var hasGeneratedImage = false;
+
+  // --- Subtitle labels ---
+  var subtitles = {
+    face: "Face Segmentation \u00b7 Stable Diffusion",
+    object: "Object Segmentation \u00b7 Stable Diffusion"
+  };
 
   // --- Button state management ---
   function updateGenerateButton() {
@@ -67,12 +76,28 @@
     resultSection.hidden = false;
   }
 
+  // --- Mode helpers ---
+  function currentMode() {
+    return modeSelect.value;
+  }
+
+  function currentClasses() {
+    return classSelect.value;
+  }
+
+  function updateModeUI() {
+    var mode = currentMode();
+    classSelect.style.display = mode === "object" ? "" : "none";
+    headerSub.textContent = subtitles[mode] || subtitles.face;
+  }
+
   // --- Model status polling ---
   function pollModelStatus() {
     fetch("/api/status")
       .then(function (r) { return r.json(); })
       .then(function (data) {
-        chipYolo.className = "status-chip " + (data.yolo === "ready" ? "ready" : "loading");
+        var detectReady = data.detection === "ready";
+        chipDetect.className = "status-chip " + (detectReady ? "ready" : "loading");
 
         if (data.inpaint === "ready") {
           chipInpaint.className = "status-chip ready";
@@ -131,7 +156,14 @@
   }
 
   function connectDetectWs() {
-    wsDetect = new WebSocket(wsUrl("/ws/detect"));
+    // Build URL with mode + class query params.
+    var mode = currentMode();
+    var url = "/ws/detect?mode=" + encodeURIComponent(mode);
+    if (mode === "object") {
+      url += "&classes=" + encodeURIComponent(currentClasses());
+    }
+
+    wsDetect = new WebSocket(wsUrl(url));
     wsDetect.binaryType = "arraybuffer";
 
     wsDetect.onopen = function () {
@@ -143,9 +175,17 @@
 
     wsDetect.onmessage = function (ev) {
       var resp = JSON.parse(ev.data);
+
+      if (resp.error) {
+        statusText.textContent = resp.error;
+        detecting = false;
+        updateCaptureButton();
+        return;
+      }
+
       drawBase64(ctxDetect, canvasDetect, resp.detect);
       drawBase64(ctxMask, canvasMask, resp.mask);
-      infoDetect.textContent = resp.faces + " face" + (resp.faces !== 1 ? "s" : "") + " detected";
+      infoDetect.textContent = resp.label || (resp.count + " detected");
 
       waitingForResponse = false;
       if (detecting) {
@@ -164,6 +204,23 @@
       updateCaptureButton();
       statusText.textContent = "Detect WS error";
     };
+  }
+
+  function reconnectDetectWs() {
+    if (wsDetect) {
+      // Prevent old close handler from showing stale status.
+      wsDetect.onclose = null;
+      wsDetect.onerror = null;
+      wsDetect.close();
+      wsDetect = null;
+    }
+    waitingForResponse = false;
+    detecting = false;
+    if (stream) {
+      statusText.textContent = "Loading model\u2026";
+      infoDetect.textContent = "Switching\u2026";
+      connectDetectWs();
+    }
   }
 
   function connectInpaintWs() {
@@ -243,6 +300,18 @@
     img.src = "data:image/jpeg;base64," + b64;
   }
 
+  // --- Mode switching ---
+  modeSelect.addEventListener("change", function () {
+    updateModeUI();
+    reconnectDetectWs();
+  });
+
+  classSelect.addEventListener("change", function () {
+    reconnectDetectWs();
+  });
+
+  updateModeUI();
+
   // --- Camera toggle ---
   btnCam.addEventListener("click", function () {
     if (stream) {
@@ -295,7 +364,7 @@
           return;
         }
 
-        // Show the captured mask preview in the result panel
+        // Show the captured mask preview in the result panel.
         showResultSection();
         drawBase64(ctxResult, canvasResult, data.mask);
         resultLabel.textContent = "CAPTURED PREVIEW";
