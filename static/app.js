@@ -55,6 +55,7 @@
 
   // --- Button state management ---
   function updateGenerateButton() {
+    btnGen.classList.remove("btn-cancel");
     if (isGenerating) return;
     if (!inpaintReady) {
       btnGen.disabled = true;
@@ -247,6 +248,12 @@
         var pct = Math.round((msg.step / msg.total_steps) * 100);
         progressBar.style.width = pct + "%";
         progressText.textContent = "Step " + msg.step + "/" + msg.total_steps + " (" + msg.elapsed + "s)";
+      } else if (msg.status === "cancelled") {
+        isGenerating = false;
+        resultLabel.textContent = "CANCELLED";
+        progressText.textContent = "Cancelled";
+        updateGenerateButton();
+        setTimeout(function () { progressContainer.hidden = true; }, 2000);
       } else if (msg.status === "done") {
         progressBar.style.width = "100%";
         progressText.textContent = "Done in " + msg.elapsed + "s";
@@ -383,8 +390,18 @@
       });
   });
 
-  // --- Generate ---
+  // --- Generate / Cancel ---
   btnGen.addEventListener("click", function () {
+    if (isGenerating) {
+      // Cancel the in-progress generation.
+      if (wsInpaint && wsInpaint.readyState === WebSocket.OPEN) {
+        wsInpaint.send(JSON.stringify({ action: "cancel" }));
+      }
+      btnGen.disabled = true;
+      btnGen.textContent = "Cancelling\u2026";
+      return;
+    }
+
     var prompt = inputPrompt.value.trim();
     if (!prompt) {
       alert("Enter a prompt first.");
@@ -392,8 +409,9 @@
     }
 
     isGenerating = true;
-    btnGen.disabled = true;
-    btnGen.textContent = "Generating\u2026";
+    btnGen.disabled = false;
+    btnGen.textContent = "Cancel";
+    btnGen.classList.add("btn-cancel");
 
     if (!wsInpaint || wsInpaint.readyState !== WebSocket.OPEN) {
       connectInpaintWs();

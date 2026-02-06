@@ -267,6 +267,14 @@ button:disabled {
   font-size: 0.72rem;
 }
 
+.btn-cancel {
+  background: var(--error);
+}
+.btn-cancel:hover:not(:disabled) {
+  background: #ef4444;
+  box-shadow: 0 2px 16px var(--error-dim);
+}
+
 /* ── Detection + Mask row (two columns) ────────────── */
 
 .panels-top {

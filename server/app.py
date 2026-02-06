@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from server.config import settings
 from server.detectors import FaceBiSeNetDetector, YOLOv8SegDetector, BaseDetector
 from server.masking import create_mask_preview, create_inpaint_inputs
-from server.inpainting import InpaintingEngine
+from server.inpainting import InpaintingEngine, GenerationCancelled
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +202,12 @@ async def ws_inpaint(ws: WebSocket):
         while True:
             msg = await ws.receive_text()
             req = json.loads(msg)
+
+            if req.get("action") == "cancel":
+                if state.inpaint_engine is not None:
+                    state.inpaint_engine.cancel()
+                continue
+
             prompt = req.get("prompt", "")
 
             if not prompt:
@@ -258,15 +264,56 @@ async def ws_inpaint(ws: WebSocket):
                 None, state.inpaint_engine.generate, image_pil, mask_pil, prompt, on_progress
             )
 
-            # Send progress updates while waiting for generation.
+            # Listen for cancel messages while sending progress updates.
+            cancelled = False
+            ws_recv = asyncio.ensure_future(ws.receive_text())
+
             while not gen_task.done():
+                progress_get = asyncio.ensure_future(progress_queue.get())
+
+                done, pending = await asyncio.wait(
+                    [gen_task, ws_recv, progress_get],
+                    timeout=0.5,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+
+                if progress_get in pending:
+                    progress_get.cancel()
+
+                for task in done:
+                    if task is ws_recv:
+                        try:
+                            cancel_msg = json.loads(task.result())
+                            if cancel_msg.get("action") == "cancel":
+                                state.inpaint_engine.cancel()
+                                cancelled = True
+                        except Exception:
+                            pass
+                        # Only create a new receiver when the old one completed
+                        if not gen_task.done():
+                            ws_recv = asyncio.ensure_future(ws.receive_text())
+                    elif task is progress_get:
+                        try:
+                            await ws.send_text(json.dumps(task.result()))
+                        except Exception:
+                            pass
+
+            # Clean up the pending ws receiver
+            if not ws_recv.done():
+                ws_recv.cancel()
                 try:
-                    progress_msg = await asyncio.wait_for(progress_queue.get(), timeout=0.5)
-                    await ws.send_text(json.dumps(progress_msg))
-                except asyncio.TimeoutError:
+                    await ws_recv
+                except (asyncio.CancelledError, Exception):
                     pass
 
-            result_image = await gen_task
+            try:
+                result_image = await gen_task
+            except GenerationCancelled:
+                cancelled = True
+
+            if cancelled:
+                await ws.send_text(json.dumps({"status": "cancelled"}))
+                continue
 
             # Drain remaining progress messages.
             while not progress_queue.empty():
@@ -286,7 +333,9 @@ async def ws_inpaint(ws: WebSocket):
             }))
 
     except WebSocketDisconnect:
-        pass
+        # If disconnected during generation, cancel it.
+        if state.inpaint_engine is not None:
+            state.inpaint_engine.cancel()
 
 
 @app.get("/api/status")
