@@ -9,6 +9,7 @@
     btnCapture: document.getElementById("btn-capture"),
     btnGen: document.getElementById("btn-generate"),
     btnDownload: document.getElementById("btn-download"),
+    btnClear: document.getElementById("btn-clear"),
     camSelect: document.getElementById("cam-select"),
     modeSelect: document.getElementById("mode-select"),
     classSelect: document.getElementById("class-select"),
@@ -172,15 +173,18 @@
 
     stop: function () {
       state.detection.active = false;
+      state.detection.waitingForResponse = false;
       state.camera.stream.getTracks().forEach(function (t) { t.stop(); });
       state.camera.stream = null;
       if (state.detection.ws) state.detection.ws.close();
       state.detection.ws = null;
       el.btnCam.textContent = "Start Webcam";
       el.statusText.textContent = "Webcam off";
-      state.ui.frameCaptured = false;
+      Capture.clear();
+      ctx.detect.clearRect(0, 0, el.canvasDetect.width, el.canvasDetect.height);
+      ctx.mask.clearRect(0, 0, el.canvasMask.width, el.canvasMask.height);
+      el.infoDetect.textContent = "No data";
       UI.updateCaptureButton();
-      UI.updateGenerateButton();
     },
 
     toggle: function () {
@@ -255,6 +259,8 @@
       }
       state.detection.waitingForResponse = false;
       state.detection.active = false;
+      ctx.detect.clearRect(0, 0, el.canvasDetect.width, el.canvasDetect.height);
+      ctx.mask.clearRect(0, 0, el.canvasMask.width, el.canvasMask.height);
       if (state.camera.stream) {
         el.statusText.textContent = "Loading model\u2026";
         el.infoDetect.textContent = "Switching\u2026";
@@ -402,7 +408,8 @@
           }
           UI.updateGenerateButton();
 
-          if (data.inpaint !== "ready" && data.inpaint !== "error") {
+          var inpaintSettled = data.inpaint === "ready" || data.inpaint === "error";
+          if (!detectReady || !inpaintSettled) {
             setTimeout(ModelStatus.poll, 3000);
           }
         })
@@ -416,6 +423,16 @@
   // Capture — freeze current detection frame for inpainting
   // =========================================================================
   var Capture = {
+    clear: function () {
+      el.resultSection.hidden = true;
+      ctx.result.clearRect(0, 0, el.canvasResult.width, el.canvasResult.height);
+      state.ui.frameCaptured = false;
+      state.ui.hasGeneratedImage = false;
+      el.btnDownload.disabled = true;
+      el.btnCapture.textContent = "Capture Frame";
+      UI.updateGenerateButton();
+    },
+
     take: function () {
       el.btnCapture.disabled = true;
       el.btnCapture.textContent = "Capturing\u2026";
@@ -463,6 +480,7 @@
 
   el.btnCam.addEventListener("click", Camera.toggle);
   el.btnCapture.addEventListener("click", Capture.take);
+  el.btnClear.addEventListener("click", Capture.clear);
   el.btnGen.addEventListener("click", Inpainting.generate);
 
   el.btnDownload.addEventListener("click", function () {

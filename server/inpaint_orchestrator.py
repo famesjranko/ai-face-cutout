@@ -1,10 +1,13 @@
-"""Encapsulates the inpainting generation lifecycle."""
+"""Encapsulates the inpainting generation lifecycle.
+
+Uses a forked child process for SD inference so that cancellation is
+instant (kill the child) rather than waiting for the current diffusion
+step to finish.
+"""
 
 from __future__ import annotations
 
 import asyncio
-import base64
-import io
 import json
 import logging
 import time
@@ -13,7 +16,6 @@ from fastapi import WebSocket
 from pydantic import BaseModel
 
 from server.config import settings
-from server.inpainting import GenerationCancelled
 from server.masking import create_inpaint_inputs
 from server.schemas import (
     ErrorResponse,
@@ -34,11 +36,14 @@ class InpaintOrchestrator:
         self._state = state
 
     async def handle_cancel(self):
-        """Cancel any in-progress generation."""
-        with self._state.lock:
-            engine = self._state.inpaint_engine
-        if engine is not None:
-            engine.cancel()
+        """Cancel any in-progress generation.  Safe to call at any time."""
+        worker = self._state.inpaint_worker
+        if worker is None:
+            return
+        try:
+            worker.cancel()
+        except Exception:
+            logger.exception("Error during cancel")
 
     async def handle_generate(self, req: dict):
         """Validate inputs and run the generation lifecycle."""
@@ -48,9 +53,8 @@ class InpaintOrchestrator:
             await self._send_model(ErrorResponse(error="No prompt provided"))
             return
 
-        with self._state.lock:
-            engine = self._state.inpaint_engine
-        if engine is None or engine.pipe is None:
+        worker = self._state.inpaint_worker
+        if worker is None or not worker.is_ready:
             await self._send_model(ErrorResponse(error="Inpainting model still loading, please wait..."))
             return
 
@@ -73,87 +77,111 @@ class InpaintOrchestrator:
             return
 
         image_pil, mask_pil = inputs
-        await self._run_generation(engine, image_pil, mask_pil, prompt, loop)
+        await self._run_generation(worker, image_pil, mask_pil, prompt, loop)
 
-    async def _run_generation(self, engine, image_pil, mask_pil, prompt, loop):
+    _GENERATION_TIMEOUT = 600  # 10 minutes
+
+    async def _run_generation(self, worker, image_pil, mask_pil, prompt, loop):
         """Execute generation with progress streaming and cancel support."""
         await self._send_model(InpaintStarted(total_steps=settings.INPAINT_STEPS))
 
         start_time = time.time()
-        progress_queue: asyncio.Queue = asyncio.Queue()
-
-        def on_progress(step: int, total: int):
-            elapsed = time.time() - start_time
-            loop.call_soon_threadsafe(
-                progress_queue.put_nowait,
-                InpaintProgress(step=step, total_steps=total, elapsed=round(elapsed, 1)),
-            )
-
-        gen_task = loop.run_in_executor(
-            None, engine.generate, image_pil, mask_pil, prompt, on_progress
-        )
-
-        cancelled = False
-        ws_recv = asyncio.ensure_future(self._ws.receive_text())
-
-        while not gen_task.done():
-            progress_get = asyncio.ensure_future(progress_queue.get())
-
-            done, pending = await asyncio.wait(
-                [gen_task, ws_recv, progress_get],
-                timeout=0.5,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-
-            if progress_get in pending:
-                progress_get.cancel()
-
-            for task in done:
-                if task is ws_recv:
-                    try:
-                        cancel_msg = json.loads(task.result())
-                        if cancel_msg.get("action") == "cancel":
-                            engine.cancel()
-                            cancelled = True
-                    except Exception:
-                        pass
-                    if not gen_task.done():
-                        ws_recv = asyncio.ensure_future(self._ws.receive_text())
-                elif task is progress_get:
-                    try:
-                        await self._send_model(task.result())
-                    except Exception:
-                        pass
-
-        # Clean up the pending ws receiver.
-        if not ws_recv.done():
-            ws_recv.cancel()
-            try:
-                await ws_recv
-            except (asyncio.CancelledError, Exception):
-                pass
 
         try:
-            result_image = await gen_task
-        except GenerationCancelled:
-            cancelled = True
-
-        if cancelled:
-            await self._send_model(InpaintCancelled())
+            parent_conn = worker.spawn(image_pil, mask_pil, prompt)
+        except RuntimeError as exc:
+            await self._send_model(ErrorResponse(error=str(exc)))
             return
 
-        # Drain remaining progress messages.
-        while not progress_queue.empty():
-            progress_msg = progress_queue.get_nowait()
-            await self._send_model(progress_msg)
+        ws_recv = asyncio.ensure_future(self._ws.receive_text())
+        pipe_task = loop.run_in_executor(None, parent_conn.recv)
 
-        # Encode result as base64 JPEG.
-        buf = io.BytesIO()
-        result_image.save(buf, format="JPEG", quality=90)
-        result_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        try:
+            while True:
+                # Timeout check
+                if time.time() - start_time > self._GENERATION_TIMEOUT:
+                    logger.warning("Generation timed out after %ds", self._GENERATION_TIMEOUT)
+                    worker.cancel()
+                    await self._send_model(ErrorResponse(error="Generation timed out"))
+                    break
 
-        elapsed = round(time.time() - start_time, 1)
-        await self._send_model(InpaintDone(image=result_b64, elapsed=elapsed))
+                done, pending = await asyncio.wait(
+                    [pipe_task, ws_recv],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+
+                if pipe_task in done:
+                    try:
+                        msg = pipe_task.result()
+                    except EOFError:
+                        # Child died — check exit code to distinguish cancel vs crash
+                        exitcode = worker._process.exitcode if worker._process else None
+                        if exitcode is not None and exitcode == -15:
+                            # SIGTERM — this was a cancel
+                            logger.info("Child terminated by SIGTERM (cancel)")
+                        else:
+                            logger.error("Child process crashed (exitcode=%s)", exitcode)
+                            await self._send_model(
+                                ErrorResponse(error="Generation process crashed")
+                            )
+                        break
+
+                    if msg["type"] == "progress":
+                        elapsed = time.time() - start_time
+                        await self._send_model(
+                            InpaintProgress(
+                                step=msg["step"],
+                                total_steps=msg["total"],
+                                elapsed=round(elapsed, 1),
+                            )
+                        )
+                        # Recreate pipe_task only after it completes
+                        pipe_task = loop.run_in_executor(None, parent_conn.recv)
+                    elif msg["type"] == "done":
+                        elapsed = time.time() - start_time
+                        await self._send_model(
+                            InpaintDone(
+                                image=msg["image_b64"],
+                                elapsed=round(elapsed, 1),
+                            )
+                        )
+                        break
+                    elif msg["type"] == "error":
+                        await self._send_model(ErrorResponse(error=msg["message"]))
+                        break
+
+                if ws_recv in done:
+                    try:
+                        raw = ws_recv.result()
+                        cancel_msg = json.loads(raw)
+                        if cancel_msg.get("action") == "cancel":
+                            worker.cancel()
+                            await self._send_model(InpaintCancelled())
+                            break
+                    except Exception:
+                        pass
+                    # Start listening for the next WS message
+                    ws_recv = asyncio.ensure_future(self._ws.receive_text())
+        finally:
+            # Clean up the pending ws receiver
+            if not ws_recv.done():
+                ws_recv.cancel()
+                try:
+                    await ws_recv
+                except (asyncio.CancelledError, Exception):
+                    pass
+            # Clean up pending pipe task
+            if pipe_task is not None and not pipe_task.done():
+                pipe_task.cancel()
+                try:
+                    await pipe_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            # Join child process and close pipe
+            try:
+                worker.cleanup_child()
+            except Exception:
+                logger.exception("Error during child cleanup")
 
     async def _send_model(self, model: BaseModel):
         await self._ws.send_text(model.model_dump_json())
