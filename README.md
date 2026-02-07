@@ -1,5 +1,7 @@
 # AI Photo Standee
 
+![Graphic](imgs/graphic.png)
+
 AI-powered photo standee — like the cutout boards at amusement parks where you stick your face through a hole in a painted scene, but powered by generative AI.
 
 Your webcam detects and segments your face (or any object) in real time, then Stable Diffusion inpaints the scene around it based on a text prompt. No API keys needed — everything runs locally.
