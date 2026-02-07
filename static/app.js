@@ -1,434 +1,488 @@
 (function () {
   "use strict";
 
-  // --- Elements ---
-  var btnCam = document.getElementById("btn-cam");
-  var btnCapture = document.getElementById("btn-capture");
-  var btnGen = document.getElementById("btn-generate");
-  var btnDownload = document.getElementById("btn-download");
-  var camSelect = document.getElementById("cam-select");
-  var modeSelect = document.getElementById("mode-select");
-  var classSelect = document.getElementById("class-select");
-  var statusText = document.getElementById("status-text");
-  var headerSub = document.getElementById("header-sub");
-  var inputPrompt = document.getElementById("input-prompt");
-  var infoDetect = document.getElementById("info-detect");
-  var resultLabel = document.getElementById("result-label");
-  var resultSection = document.getElementById("result-section");
-  var progressContainer = document.getElementById("progress-container");
-  var progressBar = document.getElementById("progress-bar");
-  var progressText = document.getElementById("progress-text");
+  // =========================================================================
+  // DOM Elements
+  // =========================================================================
+  var el = {
+    btnCam: document.getElementById("btn-cam"),
+    btnCapture: document.getElementById("btn-capture"),
+    btnGen: document.getElementById("btn-generate"),
+    btnDownload: document.getElementById("btn-download"),
+    camSelect: document.getElementById("cam-select"),
+    modeSelect: document.getElementById("mode-select"),
+    classSelect: document.getElementById("class-select"),
+    statusText: document.getElementById("status-text"),
+    headerSub: document.getElementById("header-sub"),
+    inputPrompt: document.getElementById("input-prompt"),
+    infoDetect: document.getElementById("info-detect"),
+    resultLabel: document.getElementById("result-label"),
+    resultSection: document.getElementById("result-section"),
+    progressContainer: document.getElementById("progress-container"),
+    progressBar: document.getElementById("progress-bar"),
+    progressText: document.getElementById("progress-text"),
+    canvasDetect: document.getElementById("canvas-detect"),
+    canvasMask: document.getElementById("canvas-mask"),
+    canvasResult: document.getElementById("canvas-result"),
+    video: document.getElementById("webcam-video"),
+    captureCanvas: document.getElementById("capture-canvas"),
+    chipDetect: document.getElementById("chip-detect"),
+    chipInpaint: document.getElementById("chip-inpaint"),
+    modelBanner: document.getElementById("model-banner"),
+    bannerDetail: document.getElementById("banner-detail")
+  };
 
-  var canvasDetect = document.getElementById("canvas-detect");
-  var canvasMask = document.getElementById("canvas-mask");
-  var canvasResult = document.getElementById("canvas-result");
-  var ctxDetect = canvasDetect.getContext("2d");
-  var ctxMask = canvasMask.getContext("2d");
-  var ctxResult = canvasResult.getContext("2d");
+  var ctx = {
+    detect: el.canvasDetect.getContext("2d"),
+    mask: el.canvasMask.getContext("2d"),
+    result: el.canvasResult.getContext("2d"),
+    capture: el.captureCanvas.getContext("2d")
+  };
 
-  var video = document.getElementById("webcam-video");
-  var captureCanvas = document.getElementById("capture-canvas");
-  var captureCtx = captureCanvas.getContext("2d");
+  // =========================================================================
+  // Application State
+  // =========================================================================
+  var state = {
+    camera: {
+      stream: null
+    },
+    detection: {
+      ws: null,
+      active: false,
+      waitingForResponse: false
+    },
+    inpainting: {
+      ws: null,
+      ready: false,
+      generating: false
+    },
+    ui: {
+      frameCaptured: false,
+      hasGeneratedImage: false
+    }
+  };
 
-  // Status elements
-  var chipDetect = document.getElementById("chip-detect");
-  var chipInpaint = document.getElementById("chip-inpaint");
-  var modelBanner = document.getElementById("model-banner");
-  var bannerDetail = document.getElementById("banner-detail");
-
-  // --- State ---
-  var stream = null;
-  var wsDetect = null;
-  var wsInpaint = null;
-  var detecting = false;
-  var waitingForResponse = false;
-  var inpaintReady = false;
-  var isGenerating = false;
-  var frameCaptured = false;
-  var hasGeneratedImage = false;
-
-  // --- Subtitle labels ---
-  var subtitles = {
+  var SUBTITLES = {
     face: "Face Segmentation \u00b7 Stable Diffusion",
     object: "Object Segmentation \u00b7 Stable Diffusion"
   };
 
-  // --- Button state management ---
-  function updateGenerateButton() {
-    btnGen.classList.remove("btn-cancel");
-    if (isGenerating) return;
-    if (!inpaintReady) {
-      btnGen.disabled = true;
-      btnGen.textContent = "Model Loading\u2026";
-    } else if (!frameCaptured) {
-      btnGen.disabled = true;
-      btnGen.textContent = "Generate";
-    } else {
-      btnGen.disabled = false;
-      btnGen.textContent = "Generate";
+  // =========================================================================
+  // Utilities
+  // =========================================================================
+  var Util = {
+    wsUrl: function (path) {
+      var proto = location.protocol === "https:" ? "wss:" : "ws:";
+      return proto + "//" + location.host + path;
+    },
+
+    drawBase64: function (targetCtx, canvas, b64) {
+      var img = new Image();
+      img.onload = function () {
+        canvas.width = img.width;
+        canvas.height = img.height;
+        targetCtx.drawImage(img, 0, 0);
+      };
+      img.src = "data:image/jpeg;base64," + b64;
     }
-  }
+  };
 
-  function updateCaptureButton() {
-    btnCapture.disabled = !detecting;
-  }
+  // =========================================================================
+  // UI — button states, mode switching, progress display
+  // =========================================================================
+  var UI = {
+    updateGenerateButton: function () {
+      el.btnGen.classList.remove("btn-cancel");
+      if (state.inpainting.generating) return;
+      if (!state.inpainting.ready) {
+        el.btnGen.disabled = true;
+        el.btnGen.textContent = "Model Loading\u2026";
+      } else if (!state.ui.frameCaptured) {
+        el.btnGen.disabled = true;
+        el.btnGen.textContent = "Generate";
+      } else {
+        el.btnGen.disabled = false;
+        el.btnGen.textContent = "Generate";
+      }
+    },
 
-  function showResultSection() {
-    resultSection.hidden = false;
-  }
+    updateCaptureButton: function () {
+      el.btnCapture.disabled = !state.detection.active;
+    },
 
-  // --- Mode helpers ---
-  function currentMode() {
-    return modeSelect.value;
-  }
+    showResultSection: function () {
+      el.resultSection.hidden = false;
+    },
 
-  function currentClasses() {
-    return classSelect.value;
-  }
+    currentMode: function () {
+      return el.modeSelect.value;
+    },
 
-  function updateModeUI() {
-    var mode = currentMode();
-    classSelect.style.display = mode === "object" ? "" : "none";
-    headerSub.textContent = subtitles[mode] || subtitles.face;
-  }
+    currentClasses: function () {
+      return el.classSelect.value;
+    },
 
-  // --- Model status polling ---
-  function pollModelStatus() {
-    fetch("/api/status")
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
-        var detectReady = data.detection === "ready";
-        chipDetect.className = "status-chip " + (detectReady ? "ready" : "loading");
+    updateModeUI: function () {
+      var mode = UI.currentMode();
+      el.classSelect.style.display = mode === "object" ? "" : "none";
+      el.headerSub.textContent = SUBTITLES[mode] || SUBTITLES.face;
+    }
+  };
 
-        if (data.inpaint === "ready") {
-          chipInpaint.className = "status-chip ready";
-          modelBanner.classList.add("hidden");
-          inpaintReady = true;
-          updateGenerateButton();
-        } else if (data.inpaint === "error") {
-          chipInpaint.className = "status-chip error";
-          modelBanner.classList.add("hidden");
-          inpaintReady = false;
-          updateGenerateButton();
-        } else {
-          chipInpaint.className = "status-chip loading";
-          bannerDetail.textContent = data.inpaint_detail || "Loading...";
-          inpaintReady = false;
-          updateGenerateButton();
-        }
-
-        if (data.inpaint !== "ready" && data.inpaint !== "error") {
-          setTimeout(pollModelStatus, 3000);
-        }
-      })
-      .catch(function () {
-        setTimeout(pollModelStatus, 5000);
+  // =========================================================================
+  // Camera — enumerate devices, start/stop webcam stream
+  // =========================================================================
+  var Camera = {
+    populateDevices: function () {
+      navigator.mediaDevices.enumerateDevices().then(function (devices) {
+        while (el.camSelect.options.length > 1) el.camSelect.remove(1);
+        devices.forEach(function (d) {
+          if (d.kind === "videoinput") {
+            var opt = document.createElement("option");
+            opt.value = d.deviceId;
+            opt.textContent = d.label || ("Camera " + el.camSelect.options.length);
+            el.camSelect.appendChild(opt);
+          }
+        });
       });
-  }
+    },
 
-  pollModelStatus();
-
-  // --- Enumerate cameras ---
-  function populateCameras() {
-    navigator.mediaDevices.enumerateDevices().then(function (devices) {
-      while (camSelect.options.length > 1) camSelect.remove(1);
-      devices.forEach(function (d) {
-        if (d.kind === "videoinput") {
-          var opt = document.createElement("option");
-          opt.value = d.deviceId;
-          opt.textContent = d.label || ("Camera " + camSelect.options.length);
-          camSelect.appendChild(opt);
-        }
-      });
-    });
-  }
-
-  navigator.mediaDevices.getUserMedia({ video: true }).then(function (tmp) {
-    tmp.getTracks().forEach(function (t) { t.stop(); });
-    populateCameras();
-  }).catch(function () {
-    populateCameras();
-  });
-
-  // --- WebSocket helpers ---
-  function wsUrl(path) {
-    var proto = location.protocol === "https:" ? "wss:" : "ws:";
-    return proto + "//" + location.host + path;
-  }
-
-  function connectDetectWs() {
-    // Build URL with mode + class query params.
-    var mode = currentMode();
-    var url = "/ws/detect?mode=" + encodeURIComponent(mode);
-    if (mode === "object") {
-      url += "&classes=" + encodeURIComponent(currentClasses());
-    }
-
-    wsDetect = new WebSocket(wsUrl(url));
-    wsDetect.binaryType = "arraybuffer";
-
-    wsDetect.onopen = function () {
-      statusText.textContent = "Connected \u2014 streaming";
-      detecting = true;
-      updateCaptureButton();
-      sendFrame();
-    };
-
-    wsDetect.onmessage = function (ev) {
-      var resp = JSON.parse(ev.data);
-
-      if (resp.error) {
-        statusText.textContent = resp.error;
-        detecting = false;
-        updateCaptureButton();
-        return;
-      }
-
-      drawBase64(ctxDetect, canvasDetect, resp.detect);
-      drawBase64(ctxMask, canvasMask, resp.mask);
-      infoDetect.textContent = resp.label || (resp.count + " detected");
-
-      waitingForResponse = false;
-      if (detecting) {
-        sendFrame();
-      }
-    };
-
-    wsDetect.onclose = function () {
-      detecting = false;
-      updateCaptureButton();
-      statusText.textContent = "Detect WS closed";
-    };
-
-    wsDetect.onerror = function () {
-      detecting = false;
-      updateCaptureButton();
-      statusText.textContent = "Detect WS error";
-    };
-  }
-
-  function reconnectDetectWs() {
-    if (wsDetect) {
-      // Prevent old close handler from showing stale status.
-      wsDetect.onclose = null;
-      wsDetect.onerror = null;
-      wsDetect.close();
-      wsDetect = null;
-    }
-    waitingForResponse = false;
-    detecting = false;
-    if (stream) {
-      statusText.textContent = "Loading model\u2026";
-      infoDetect.textContent = "Switching\u2026";
-      connectDetectWs();
-    }
-  }
-
-  function connectInpaintWs() {
-    wsInpaint = new WebSocket(wsUrl("/ws/inpaint"));
-
-    wsInpaint.onmessage = function (ev) {
-      var msg = JSON.parse(ev.data);
-
-      if (msg.error) {
-        alert("Error: " + msg.error);
-        isGenerating = false;
-        updateGenerateButton();
-        progressContainer.hidden = true;
-        return;
-      }
-
-      if (msg.status === "started") {
-        resultLabel.textContent = "GENERATING\u2026";
-        showResultSection();
-        progressContainer.hidden = false;
-        progressBar.style.width = "0%";
-        progressText.textContent = "Starting\u2026";
-      } else if (msg.status === "progress") {
-        var pct = Math.round((msg.step / msg.total_steps) * 100);
-        progressBar.style.width = pct + "%";
-        progressText.textContent = "Step " + msg.step + "/" + msg.total_steps + " (" + msg.elapsed + "s)";
-      } else if (msg.status === "cancelled") {
-        isGenerating = false;
-        resultLabel.textContent = "CANCELLED";
-        progressText.textContent = "Cancelled";
-        updateGenerateButton();
-        setTimeout(function () { progressContainer.hidden = true; }, 2000);
-      } else if (msg.status === "done") {
-        progressBar.style.width = "100%";
-        progressText.textContent = "Done in " + msg.elapsed + "s";
-        drawBase64(ctxResult, canvasResult, msg.image);
-        resultLabel.textContent = "GENERATED";
-        isGenerating = false;
-        hasGeneratedImage = true;
-        btnDownload.disabled = false;
-        updateGenerateButton();
-        setTimeout(function () { progressContainer.hidden = true; }, 3000);
-      }
-    };
-
-    wsInpaint.onclose = function () {
-      isGenerating = false;
-      updateGenerateButton();
-    };
-  }
-
-  // --- Frame capture & send ---
-  function sendFrame() {
-    if (!detecting || !wsDetect || wsDetect.readyState !== WebSocket.OPEN) return;
-    if (waitingForResponse) return;
-
-    captureCanvas.width = video.videoWidth || 640;
-    captureCanvas.height = video.videoHeight || 480;
-    captureCtx.drawImage(video, 0, 0);
-
-    captureCanvas.toBlob(
-      function (blob) {
-        if (blob && wsDetect && wsDetect.readyState === WebSocket.OPEN) {
-          waitingForResponse = true;
-          blob.arrayBuffer().then(function (buf) {
-            wsDetect.send(buf);
-          });
-        }
-      },
-      "image/jpeg",
-      0.75
-    );
-  }
-
-  // --- Draw base64 image to canvas ---
-  function drawBase64(ctx, canvas, b64) {
-    var img = new Image();
-    img.onload = function () {
-      canvas.width = img.width;
-      canvas.height = img.height;
-      ctx.drawImage(img, 0, 0);
-    };
-    img.src = "data:image/jpeg;base64," + b64;
-  }
-
-  // --- Mode switching ---
-  modeSelect.addEventListener("change", function () {
-    updateModeUI();
-    reconnectDetectWs();
-  });
-
-  classSelect.addEventListener("change", function () {
-    reconnectDetectWs();
-  });
-
-  updateModeUI();
-
-  // --- Camera toggle ---
-  btnCam.addEventListener("click", function () {
-    if (stream) {
-      detecting = false;
-      stream.getTracks().forEach(function (t) { t.stop(); });
-      stream = null;
-      if (wsDetect) wsDetect.close();
-      wsDetect = null;
-      btnCam.textContent = "Start Webcam";
-      statusText.textContent = "Webcam off";
-      frameCaptured = false;
-      updateCaptureButton();
-      updateGenerateButton();
-    } else {
-      var deviceId = camSelect.value;
+    start: function () {
+      var deviceId = el.camSelect.value;
       var constraints = { video: { width: 640, height: 480 } };
       if (deviceId) {
         constraints.video.deviceId = { exact: deviceId };
       }
-      btnCam.disabled = true;
-      statusText.textContent = "Requesting camera\u2026";
+      el.btnCam.disabled = true;
+      el.statusText.textContent = "Requesting camera\u2026";
       navigator.mediaDevices
         .getUserMedia(constraints)
         .then(function (s) {
-          stream = s;
-          video.srcObject = s;
-          btnCam.textContent = "Stop Webcam";
-          btnCam.disabled = false;
-          connectDetectWs();
+          state.camera.stream = s;
+          el.video.srcObject = s;
+          el.btnCam.textContent = "Stop Webcam";
+          el.btnCam.disabled = false;
+          Detection.connect();
         })
         .catch(function (err) {
-          statusText.textContent = "Camera error: " + err.message;
-          btnCam.disabled = false;
+          el.statusText.textContent = "Camera error: " + err.message;
+          el.btnCam.disabled = false;
         });
+    },
+
+    stop: function () {
+      state.detection.active = false;
+      state.camera.stream.getTracks().forEach(function (t) { t.stop(); });
+      state.camera.stream = null;
+      if (state.detection.ws) state.detection.ws.close();
+      state.detection.ws = null;
+      el.btnCam.textContent = "Start Webcam";
+      el.statusText.textContent = "Webcam off";
+      state.ui.frameCaptured = false;
+      UI.updateCaptureButton();
+      UI.updateGenerateButton();
+    },
+
+    toggle: function () {
+      if (state.camera.stream) {
+        Camera.stop();
+      } else {
+        Camera.start();
+      }
     }
-  });
+  };
 
-  // --- Capture frame ---
-  btnCapture.addEventListener("click", function () {
-    btnCapture.disabled = true;
-    btnCapture.textContent = "Capturing\u2026";
+  // =========================================================================
+  // Detection — WebSocket connection, frame send/receive loop
+  // =========================================================================
+  var Detection = {
+    connect: function () {
+      var mode = UI.currentMode();
+      var url = "/ws/detect?mode=" + encodeURIComponent(mode);
+      if (mode === "object") {
+        url += "&classes=" + encodeURIComponent(UI.currentClasses());
+      }
 
-    fetch("/api/capture", { method: "POST" })
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
-        if (data.error) {
-          alert("Capture failed: " + data.error);
-          btnCapture.disabled = false;
-          btnCapture.textContent = "Capture Frame";
+      state.detection.ws = new WebSocket(Util.wsUrl(url));
+      state.detection.ws.binaryType = "arraybuffer";
+
+      state.detection.ws.onopen = function () {
+        el.statusText.textContent = "Connected \u2014 streaming";
+        state.detection.active = true;
+        UI.updateCaptureButton();
+        Detection.sendFrame();
+      };
+
+      state.detection.ws.onmessage = function (ev) {
+        var resp = JSON.parse(ev.data);
+
+        if (resp.error) {
+          el.statusText.textContent = resp.error;
+          state.detection.active = false;
+          UI.updateCaptureButton();
           return;
         }
 
-        // Show the captured mask preview in the result panel.
-        showResultSection();
-        drawBase64(ctxResult, canvasResult, data.mask);
-        resultLabel.textContent = "CAPTURED PREVIEW";
-        hasGeneratedImage = false;
-        btnDownload.disabled = true;
+        Util.drawBase64(ctx.detect, el.canvasDetect, resp.detect);
+        Util.drawBase64(ctx.mask, el.canvasMask, resp.mask);
+        el.infoDetect.textContent = resp.label || (resp.count + " detected");
 
-        frameCaptured = true;
-        btnCapture.textContent = "Recapture";
-        btnCapture.disabled = false;
-        updateGenerateButton();
-      })
-      .catch(function () {
-        alert("Capture request failed.");
-        btnCapture.disabled = false;
-        btnCapture.textContent = "Capture Frame";
-      });
-  });
-
-  // --- Generate / Cancel ---
-  btnGen.addEventListener("click", function () {
-    if (isGenerating) {
-      // Cancel the in-progress generation.
-      if (wsInpaint && wsInpaint.readyState === WebSocket.OPEN) {
-        wsInpaint.send(JSON.stringify({ action: "cancel" }));
-      }
-      btnGen.disabled = true;
-      btnGen.textContent = "Cancelling\u2026";
-      return;
-    }
-
-    var prompt = inputPrompt.value.trim();
-    if (!prompt) {
-      alert("Enter a prompt first.");
-      return;
-    }
-
-    isGenerating = true;
-    btnGen.disabled = false;
-    btnGen.textContent = "Cancel";
-    btnGen.classList.add("btn-cancel");
-
-    if (!wsInpaint || wsInpaint.readyState !== WebSocket.OPEN) {
-      connectInpaintWs();
-      wsInpaint.onopen = function () {
-        wsInpaint.send(JSON.stringify({ prompt: prompt }));
+        state.detection.waitingForResponse = false;
+        if (state.detection.active) {
+          Detection.sendFrame();
+        }
       };
-    } else {
-      wsInpaint.send(JSON.stringify({ prompt: prompt }));
+
+      state.detection.ws.onclose = function () {
+        state.detection.active = false;
+        UI.updateCaptureButton();
+        el.statusText.textContent = "Detect WS closed";
+      };
+
+      state.detection.ws.onerror = function () {
+        state.detection.active = false;
+        UI.updateCaptureButton();
+        el.statusText.textContent = "Detect WS error";
+      };
+    },
+
+    reconnect: function () {
+      if (state.detection.ws) {
+        state.detection.ws.onclose = null;
+        state.detection.ws.onerror = null;
+        state.detection.ws.close();
+        state.detection.ws = null;
+      }
+      state.detection.waitingForResponse = false;
+      state.detection.active = false;
+      if (state.camera.stream) {
+        el.statusText.textContent = "Loading model\u2026";
+        el.infoDetect.textContent = "Switching\u2026";
+        Detection.connect();
+      }
+    },
+
+    sendFrame: function () {
+      if (!state.detection.active || !state.detection.ws ||
+          state.detection.ws.readyState !== WebSocket.OPEN) return;
+      if (state.detection.waitingForResponse) return;
+
+      el.captureCanvas.width = el.video.videoWidth || 640;
+      el.captureCanvas.height = el.video.videoHeight || 480;
+      ctx.capture.drawImage(el.video, 0, 0);
+
+      el.captureCanvas.toBlob(
+        function (blob) {
+          if (blob && state.detection.ws &&
+              state.detection.ws.readyState === WebSocket.OPEN) {
+            state.detection.waitingForResponse = true;
+            blob.arrayBuffer().then(function (buf) {
+              state.detection.ws.send(buf);
+            });
+          }
+        },
+        "image/jpeg",
+        0.75
+      );
     }
+  };
+
+  // =========================================================================
+  // Inpainting — WebSocket connection, generate/cancel, progress handling
+  // =========================================================================
+  var Inpainting = {
+    connect: function () {
+      state.inpainting.ws = new WebSocket(Util.wsUrl("/ws/inpaint"));
+
+      state.inpainting.ws.onmessage = function (ev) {
+        var msg = JSON.parse(ev.data);
+
+        if (msg.error) {
+          alert("Error: " + msg.error);
+          state.inpainting.generating = false;
+          UI.updateGenerateButton();
+          el.progressContainer.hidden = true;
+          return;
+        }
+
+        if (msg.status === "started") {
+          el.resultLabel.textContent = "GENERATING\u2026";
+          UI.showResultSection();
+          el.progressContainer.hidden = false;
+          el.progressBar.style.width = "0%";
+          el.progressText.textContent = "Starting\u2026";
+        } else if (msg.status === "progress") {
+          var pct = Math.round((msg.step / msg.total_steps) * 100);
+          el.progressBar.style.width = pct + "%";
+          el.progressText.textContent = "Step " + msg.step + "/" + msg.total_steps + " (" + msg.elapsed + "s)";
+        } else if (msg.status === "cancelled") {
+          state.inpainting.generating = false;
+          el.resultLabel.textContent = "CANCELLED";
+          el.progressText.textContent = "Cancelled";
+          UI.updateGenerateButton();
+          setTimeout(function () { el.progressContainer.hidden = true; }, 2000);
+        } else if (msg.status === "done") {
+          el.progressBar.style.width = "100%";
+          el.progressText.textContent = "Done in " + msg.elapsed + "s";
+          Util.drawBase64(ctx.result, el.canvasResult, msg.image);
+          el.resultLabel.textContent = "GENERATED";
+          state.inpainting.generating = false;
+          state.ui.hasGeneratedImage = true;
+          el.btnDownload.disabled = false;
+          UI.updateGenerateButton();
+          setTimeout(function () { el.progressContainer.hidden = true; }, 3000);
+        }
+      };
+
+      state.inpainting.ws.onclose = function () {
+        state.inpainting.generating = false;
+        UI.updateGenerateButton();
+      };
+    },
+
+    generate: function () {
+      if (state.inpainting.generating) {
+        Inpainting.cancel();
+        return;
+      }
+
+      var prompt = el.inputPrompt.value.trim();
+      if (!prompt) {
+        alert("Enter a prompt first.");
+        return;
+      }
+
+      state.inpainting.generating = true;
+      el.btnGen.disabled = false;
+      el.btnGen.textContent = "Cancel";
+      el.btnGen.classList.add("btn-cancel");
+
+      if (!state.inpainting.ws || state.inpainting.ws.readyState !== WebSocket.OPEN) {
+        Inpainting.connect();
+        state.inpainting.ws.onopen = function () {
+          state.inpainting.ws.send(JSON.stringify({ prompt: prompt }));
+        };
+      } else {
+        state.inpainting.ws.send(JSON.stringify({ prompt: prompt }));
+      }
+    },
+
+    cancel: function () {
+      if (state.inpainting.ws && state.inpainting.ws.readyState === WebSocket.OPEN) {
+        state.inpainting.ws.send(JSON.stringify({ action: "cancel" }));
+      }
+      el.btnGen.disabled = true;
+      el.btnGen.textContent = "Cancelling\u2026";
+    }
+  };
+
+  // =========================================================================
+  // Model Status — poll /api/status for detector and inpaint readiness
+  // =========================================================================
+  var ModelStatus = {
+    poll: function () {
+      fetch("/api/status")
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          var detectReady = data.detection === "ready";
+          el.chipDetect.className = "status-chip " + (detectReady ? "ready" : "loading");
+
+          if (data.inpaint === "ready") {
+            el.chipInpaint.className = "status-chip ready";
+            el.modelBanner.classList.add("hidden");
+            state.inpainting.ready = true;
+          } else if (data.inpaint === "error") {
+            el.chipInpaint.className = "status-chip error";
+            el.modelBanner.classList.add("hidden");
+            state.inpainting.ready = false;
+          } else {
+            el.chipInpaint.className = "status-chip loading";
+            el.bannerDetail.textContent = data.inpaint_detail || "Loading...";
+            state.inpainting.ready = false;
+          }
+          UI.updateGenerateButton();
+
+          if (data.inpaint !== "ready" && data.inpaint !== "error") {
+            setTimeout(ModelStatus.poll, 3000);
+          }
+        })
+        .catch(function () {
+          setTimeout(ModelStatus.poll, 5000);
+        });
+    }
+  };
+
+  // =========================================================================
+  // Capture — freeze current detection frame for inpainting
+  // =========================================================================
+  var Capture = {
+    take: function () {
+      el.btnCapture.disabled = true;
+      el.btnCapture.textContent = "Capturing\u2026";
+
+      fetch("/api/capture", { method: "POST" })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (data.error) {
+            alert("Capture failed: " + data.error);
+            el.btnCapture.disabled = false;
+            el.btnCapture.textContent = "Capture Frame";
+            return;
+          }
+
+          UI.showResultSection();
+          Util.drawBase64(ctx.result, el.canvasResult, data.mask);
+          el.resultLabel.textContent = "CAPTURED PREVIEW";
+          state.ui.hasGeneratedImage = false;
+          el.btnDownload.disabled = true;
+
+          state.ui.frameCaptured = true;
+          el.btnCapture.textContent = "Recapture";
+          el.btnCapture.disabled = false;
+          UI.updateGenerateButton();
+        })
+        .catch(function () {
+          alert("Capture request failed.");
+          el.btnCapture.disabled = false;
+          el.btnCapture.textContent = "Capture Frame";
+        });
+    }
+  };
+
+  // =========================================================================
+  // Event Bindings
+  // =========================================================================
+  el.modeSelect.addEventListener("change", function () {
+    UI.updateModeUI();
+    Detection.reconnect();
   });
 
-  // --- Download generated image ---
-  btnDownload.addEventListener("click", function () {
-    if (!hasGeneratedImage) return;
+  el.classSelect.addEventListener("change", function () {
+    Detection.reconnect();
+  });
+
+  el.btnCam.addEventListener("click", Camera.toggle);
+  el.btnCapture.addEventListener("click", Capture.take);
+  el.btnGen.addEventListener("click", Inpainting.generate);
+
+  el.btnDownload.addEventListener("click", function () {
+    if (!state.ui.hasGeneratedImage) return;
     var link = document.createElement("a");
     link.download = "inpainted-" + Date.now() + ".png";
-    link.href = canvasResult.toDataURL("image/png");
+    link.href = el.canvasResult.toDataURL("image/png");
     link.click();
+  });
+
+  // =========================================================================
+  // Initialization
+  // =========================================================================
+  UI.updateModeUI();
+  ModelStatus.poll();
+
+  navigator.mediaDevices.getUserMedia({ video: true }).then(function (tmp) {
+    tmp.getTracks().forEach(function (t) { t.stop(); });
+    Camera.populateDevices();
+  }).catch(function () {
+    Camera.populateDevices();
   });
 })();

@@ -17,3 +17,17 @@ Task 2 - WebSocket message schemas with Pydantic: DONE
   - Added from __future__ import annotations to inpaint_orchestrator.py
   - JSON keys unchanged — frontend contract preserved
   - Quality gate: py_compile passed on schemas.py, app.py, inpaint_orchestrator.py
+
+Task 3 - Frontend state machine refactor: DONE
+  - Replaced 27+ loose var globals with structured objects: el (DOM), ctx (canvas contexts), state (app state)
+  - state object organized into: { camera, detection, inpainting, ui }
+  - Grouped functions into namespace objects: Util, UI, Camera, Detection, Inpainting, ModelStatus, Capture
+  - Camera: populateDevices(), start(), stop(), toggle()
+  - Detection: connect(), reconnect(), sendFrame()
+  - Inpainting: connect(), generate(), cancel()
+  - Extracted Capture.take() from inline event handler
+  - Event bindings grouped in dedicated section
+  - Initialization section at bottom: updateModeUI(), poll(), camera enumerate
+  - Kept IIFE pattern, no modules/bundler, no npm deps
+  - All existing functionality preserved: detection stream, capture, inpainting with progress/cancel, mode switching
+  - Quality gate: node --check static/app.js passed (no syntax errors)

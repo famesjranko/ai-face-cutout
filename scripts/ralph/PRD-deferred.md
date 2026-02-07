@@ -34,7 +34,7 @@ Replace ad-hoc dict construction for WebSocket messages with Pydantic models. Bo
 **Files:** `server/schemas.py` (new), `server/app.py`, `server/inpaint_orchestrator.py`
 **Quality:** `python -m py_compile server/schemas.py && python -m py_compile server/app.py && python -m py_compile server/inpaint_orchestrator.py`
 
-### 3. [ ] Frontend state machine refactor
+### 3. [x] Frontend state machine refactor
 Refactor `static/app.js` from 27+ loose globals and nested callbacks into a clean state machine. The IIFE currently mixes UI state, WebSocket management, and rendering in one flat scope.
 
 **Implementation:**
