@@ -17,7 +17,6 @@ from server.config import settings
 from server.detectors import BaseDetector, create_detector
 from server.enums import DetectionMode, ModelStatus
 from server.masking import create_mask_preview
-from server.inpainting import InpaintingEngine
 from server.inpaint_orchestrator import InpaintOrchestrator
 from server.inpaint_worker import InpaintWorkerManager
 from server.schemas import DetectionResponse, ErrorResponse
@@ -29,7 +28,6 @@ logger = logging.getLogger(__name__)
 class AppState:
     detectors: Dict[str, BaseDetector] = field(default_factory=dict)
     detector_lock: threading.Lock = field(default_factory=threading.Lock)
-    inpaint_engine: Optional[InpaintingEngine] = None
     inpaint_worker: Optional[InpaintWorkerManager] = None
     latest_frame: Optional[np.ndarray] = None
     latest_mask: Optional[np.ndarray] = None
@@ -112,7 +110,6 @@ async def lifespan(app: FastAPI):
     state.detectors.clear()
     if state.inpaint_worker:
         state.inpaint_worker.shutdown()
-    state.inpaint_engine = None
 
 
 app = FastAPI(lifespan=lifespan)
