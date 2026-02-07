@@ -42,7 +42,7 @@ def make_divisible(x, divisor):
 def check_img_size(img_size, s=32):
     new_size = make_divisible(img_size, int(s))
     if new_size != img_size:
-        print('WARNING: --img-size %g must be multiple of max stride %g, updating to %g' % (img_size, s, new_size))
+        logger.warning('--img-size %g must be multiple of max stride %g, updating to %g', img_size, s, new_size)
     return new_size
 
 
@@ -195,16 +195,15 @@ def attempt_download(file, repo='ultralytics/yolov5'):
         if name in assets:
             try:
                 url = f'https://github.com/{repo}/releases/download/{tag}/{name}'
-                print(f'Downloading {url} to {file}...')
+                logger.info('Downloading %s to %s...', url, file)
                 torch.hub.download_url_to_file(url, str(file))
                 assert file.exists() and file.stat().st_size > 1E6
             except Exception as e:
-                print(f'Download error: {e}')
+                logger.warning('Download error: %s', e)
             finally:
                 if not file.exists() or file.stat().st_size < 1E6:
                     file.unlink(missing_ok=True)
-                    print(f'ERROR: Download failure for {file}')
-                print('')
+                    logger.error('Download failure for %s', file)
 
 
 # ---------------------------------------------------------------------------
@@ -295,7 +294,7 @@ def check_anchor_order(m):
     da = a[-1] - a[0]
     ds = m.stride[-1] - m.stride[0]
     if da.sign() != ds.sign():
-        print('Reversing anchor order')
+        logger.info('Reversing anchor order')
         m.anchors[:] = m.anchors.flip(0)
         m.anchor_grid[:] = m.anchor_grid.flip(0)
 
@@ -887,7 +886,7 @@ class Model(nn.Module):
             print(('%6g Conv2d.bias:' + '%10.3g' * 6) % (mi.weight.shape[1], *b[:5].mean(1).tolist(), b[5:].mean()))
 
     def fuse(self):
-        print('Fusing layers... ')
+        logger.info('Fusing layers...')
         for m in self.model.modules():
             if type(m) is Conv and hasattr(m, 'bn'):
                 m.conv = fuse_conv_and_bn(m.conv, m.bn)
@@ -901,19 +900,19 @@ class Model(nn.Module):
     def nms(self, mode=True):
         present = type(self.model[-1]) is NMS
         if mode and not present:
-            print('Adding NMS... ')
+            logger.info('Adding NMS...')
             m = NMS()
             m.f = -1
             m.i = self.model[-1].i + 1
             self.model.add_module(name='%s' % m.i, module=m)
             self.eval()
         elif not mode and present:
-            print('Removing NMS... ')
+            logger.info('Removing NMS...')
             self.model = self.model[:-1]
         return self
 
     def autoshape(self):
-        print('Adding autoShape... ')
+        logger.info('Adding autoShape...')
         m = autoShape(self)
         copy_attr(m, self, include=('yaml', 'nc', 'hyp', 'names', 'stride'), exclude=())
         return m
@@ -933,7 +932,7 @@ class autoShape(nn.Module):
         self.model = model.eval()
 
     def autoshape(self):
-        print('autoShape already enabled, skipping... ')
+        logger.info('autoShape already enabled, skipping...')
         return self
 
     def forward(self, imgs, size=640, augment=False, profile=False):
@@ -1088,7 +1087,7 @@ def attempt_load(weights, map_location=None):
     if len(model) == 1:
         return model[-1]
     else:
-        print('Ensemble created with %s\n' % weights)
+        logger.info('Ensemble created with %s', weights)
         for k in ['names', 'stride']:
             setattr(model, k, getattr(model[-1], k))
         return model

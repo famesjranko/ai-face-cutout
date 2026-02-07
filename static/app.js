@@ -173,6 +173,7 @@
 
     stop: function () {
       state.detection.active = false;
+      state.detection.waitingForResponse = false;
       state.camera.stream.getTracks().forEach(function (t) { t.stop(); });
       state.camera.stream = null;
       if (state.detection.ws) state.detection.ws.close();
@@ -407,7 +408,8 @@
           }
           UI.updateGenerateButton();
 
-          if (data.inpaint !== "ready" && data.inpaint !== "error") {
+          var inpaintSettled = data.inpaint === "ready" || data.inpaint === "error";
+          if (!detectReady || !inpaintSettled) {
             setTimeout(ModelStatus.poll, 3000);
           }
         })
