@@ -163,34 +163,37 @@ async def ws_detect(ws: WebSocket):
 
     try:
         while True:
-            # Receive JPEG bytes from browser.
-            data = await ws.receive_bytes()
-            arr = np.frombuffer(data, dtype=np.uint8)
-            frame_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-            if frame_bgr is None:
-                continue
+            try:
+                # Receive JPEG bytes from browser.
+                data = await ws.receive_bytes()
+                arr = np.frombuffer(data, dtype=np.uint8)
+                frame_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                if frame_bgr is None:
+                    continue
 
-            # Run detection.
-            result = await loop.run_in_executor(None, detector.detect, frame_bgr)
+                # Run detection.
+                result = await loop.run_in_executor(None, detector.detect, frame_bgr)
 
-            # Store latest frame + mask for inpainting.
-            with state.lock:
-                state.latest_frame = frame_bgr.copy()
-                state.latest_mask = result.mask.copy()
+                # Store latest frame + mask for inpainting.
+                with state.lock:
+                    state.latest_frame = frame_bgr.copy()
+                    state.latest_mask = result.mask.copy()
 
-            # Build mask preview.
-            mask_preview = await loop.run_in_executor(
-                None, create_mask_preview, frame_bgr, result.mask
-            )
+                # Build mask preview.
+                mask_preview = await loop.run_in_executor(
+                    None, create_mask_preview, frame_bgr, result.mask
+                )
 
-            # Send back annotated + mask as base64 JPEG.
-            resp = {
-                "detect": _encode_frame_jpeg(result.annotated_frame),
-                "mask": _encode_frame_jpeg(mask_preview),
-                "count": result.count,
-                "label": result.label,
-            }
-            await ws.send_text(json.dumps(resp))
+                # Send back annotated + mask as base64 JPEG.
+                resp = {
+                    "detect": _encode_frame_jpeg(result.annotated_frame),
+                    "mask": _encode_frame_jpeg(mask_preview),
+                    "count": result.count,
+                    "label": result.label,
+                }
+                await ws.send_text(json.dumps(resp))
+            except Exception:
+                logger.exception("Error processing detection frame")
     except WebSocketDisconnect:
         pass
 
