@@ -58,6 +58,7 @@ class FaceBiSeNetDetector(BaseDetector):
         device: str = "cpu",
         img_size: int = 320,
     ):
+        super().__init__()
         self._yolo_weights = yolo_weights
         self._bisenet_weights = bisenet_weights
         self._device_str = device
@@ -93,7 +94,7 @@ class FaceBiSeNetDetector(BaseDetector):
         self._bisenet.eval()
         logger.info("FaceBiSeNetDetector ready.")
 
-    def detect(self, frame_bgr: np.ndarray) -> DetectionResult:
+    def _detect_impl(self, frame_bgr: np.ndarray) -> DetectionResult:
         from server.detection import detect_frame
 
         annotated, det = detect_frame(

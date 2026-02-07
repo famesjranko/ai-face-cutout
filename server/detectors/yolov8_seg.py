@@ -38,6 +38,7 @@ class YOLOv8SegDetector(BaseDetector):
         device: str = "cpu",
         target_classes: List[int] | None = None,
     ):
+        super().__init__()
         self._model_variant = model_variant
         self._device_str = device
         self._target_classes = target_classes if target_classes is not None else [0]
@@ -60,7 +61,7 @@ class YOLOv8SegDetector(BaseDetector):
         self._model = YOLO(self._model_variant)
         logger.info("YOLOv8SegDetector ready.")
 
-    def detect(self, frame_bgr: np.ndarray) -> DetectionResult:
+    def _detect_impl(self, frame_bgr: np.ndarray) -> DetectionResult:
         h, w = frame_bgr.shape[:2]
         full_mask = np.zeros((h, w), dtype=np.uint8)
 
