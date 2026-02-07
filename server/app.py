@@ -201,7 +201,11 @@ async def ws_inpaint(ws: WebSocket):
     try:
         while True:
             msg = await ws.receive_text()
-            req = json.loads(msg)
+            try:
+                req = json.loads(msg)
+            except json.JSONDecodeError:
+                await ws.send_text(json.dumps({"error": "Invalid JSON"}))
+                continue
 
             if req.get("action") == "cancel":
                 if state.inpaint_engine is not None:
