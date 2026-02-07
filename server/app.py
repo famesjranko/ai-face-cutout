@@ -19,6 +19,7 @@ from server.enums import DetectionMode, ModelStatus
 from server.masking import create_mask_preview
 from server.inpainting import InpaintingEngine
 from server.inpaint_orchestrator import InpaintOrchestrator
+from server.inpaint_worker import InpaintWorkerManager
 from server.schemas import DetectionResponse, ErrorResponse
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,7 @@ class AppState:
     detectors: Dict[str, BaseDetector] = field(default_factory=dict)
     detector_lock: threading.Lock = field(default_factory=threading.Lock)
     inpaint_engine: Optional[InpaintingEngine] = None
+    inpaint_worker: Optional[InpaintWorkerManager] = None
     latest_frame: Optional[np.ndarray] = None
     latest_mask: Optional[np.ndarray] = None
     captured_frame: Optional[np.ndarray] = None
@@ -49,15 +51,15 @@ def _load_inpaint_model():
             state.inpaint_status_detail = detail
 
     try:
-        engine = InpaintingEngine(
+        worker = InpaintWorkerManager(
             model_id=settings.INPAINT_MODEL,
             device=settings.DEVICE,
             num_steps=settings.INPAINT_STEPS,
             guidance_scale=settings.GUIDANCE_SCALE,
         )
         with state.lock:
-            state.inpaint_engine = engine
-        state.inpaint_engine.load(status_callback=on_status)
+            state.inpaint_worker = worker
+        worker.load(status_callback=on_status)
         with state.lock:
             state.inpaint_status = ModelStatus.READY
             state.inpaint_status_detail = "Model ready"
@@ -108,6 +110,8 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     state.detectors.clear()
+    if state.inpaint_worker:
+        state.inpaint_worker.shutdown()
     state.inpaint_engine = None
 
 
@@ -182,6 +186,8 @@ async def ws_detect(ws: WebSocket):
                     label=result.label,
                 )
                 await ws.send_text(resp.model_dump_json())
+            except WebSocketDisconnect:
+                break
             except Exception:
                 logger.exception("Error processing detection frame")
     except WebSocketDisconnect:
