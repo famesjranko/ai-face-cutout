@@ -10,6 +10,8 @@ services:
       - DEVICE=cpu
       - INPAINT_STEPS=8
       - GUIDANCE_SCALE=7.5
+      - HF_HUB_DISABLE_PROGRESS_BARS=1
+      - HF_HUB_DISABLE_TELEMETRY=1
 
 volumes:
   hf-cache:
