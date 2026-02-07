@@ -179,6 +179,9 @@
       el.btnCam.textContent = "Start Webcam";
       el.statusText.textContent = "Webcam off";
       state.ui.frameCaptured = false;
+      ctx.detect.clearRect(0, 0, el.canvasDetect.width, el.canvasDetect.height);
+      ctx.mask.clearRect(0, 0, el.canvasMask.width, el.canvasMask.height);
+      el.infoDetect.textContent = "No data";
       UI.updateCaptureButton();
       UI.updateGenerateButton();
     },
@@ -255,6 +258,8 @@
       }
       state.detection.waitingForResponse = false;
       state.detection.active = false;
+      ctx.detect.clearRect(0, 0, el.canvasDetect.width, el.canvasDetect.height);
+      ctx.mask.clearRect(0, 0, el.canvasMask.width, el.canvasMask.height);
       if (state.camera.stream) {
         el.statusText.textContent = "Loading model\u2026";
         el.infoDetect.textContent = "Switching\u2026";
