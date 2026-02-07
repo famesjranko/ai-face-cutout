@@ -1,19 +1,16 @@
-import sys
-import os
 import copy
 
 import cv2
 import numpy as np
 import torch
 
-# Ensure project root is on the path so YOLOv5 local imports work
-_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if _ROOT not in sys.path:
-    sys.path.insert(0, _ROOT)
-
-from models.experimental import attempt_load
-from utils.datasets import letterbox
-from utils.general import check_img_size, non_max_suppression_face, scale_coords
+from server.yolov5_compat import (
+    attempt_load,
+    check_img_size,
+    letterbox,
+    non_max_suppression_face,
+    scale_coords,
+)
 
 
 def load_model(weights: str, device: str) -> torch.nn.Module:
