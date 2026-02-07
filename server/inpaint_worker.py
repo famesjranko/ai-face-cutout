@@ -120,12 +120,16 @@ class InpaintWorkerManager:
         if self._process is None:
             return
 
+        pid = self._process.pid
         self._process.terminate()
         self._process.join(timeout=0.5)
 
         if self._process.is_alive():
+            logger.warning("Child %d did not exit after SIGTERM, sending SIGKILL", pid)
             self._process.kill()
             self._process.join(timeout=1.0)
+
+        logger.info("Reaped child process %d (exitcode=%s)", pid, self._process.exitcode)
 
         if self._parent_conn is not None:
             try:
@@ -139,7 +143,9 @@ class InpaintWorkerManager:
     def cleanup_child(self):
         """Join a naturally-exited child and close the pipe."""
         if self._process is not None:
+            pid = self._process.pid
             self._process.join()
+            logger.info("Reaped child process %d (exitcode=%s)", pid, self._process.exitcode)
         if self._parent_conn is not None:
             try:
                 self._parent_conn.close()
