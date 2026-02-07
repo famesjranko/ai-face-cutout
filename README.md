@@ -68,11 +68,11 @@ server/
   app.py                   # FastAPI app, WebSocket endpoints, lifespan
   config.py                # Settings from environment variables
   detectors/               # Multi-model detection package
-    __init__.py            #   registry + factory (create_detector)
-    base.py                #   BaseDetector ABC + DetectionResult
-    face_bisenet.py        #   YOLOv5-Face bbox + BiSeNet face parsing
-    bisenet_model.py       #   BiSeNet network architecture
-    yolov8_seg.py          #   YOLOv8-seg instance segmentation
+    __init__.py            # registry + factory (create_detector)
+    base.py                # BaseDetector ABC + DetectionResult
+    face_bisenet.py        # YOLOv5-Face bbox + BiSeNet face parsing
+    bisenet_model.py       # BiSeNet network architecture
+    yolov8_seg.py          # YOLOv8-seg instance segmentation
   detection.py             # YOLOv5 face detection helpers
   yolov5_compat.py         # Consolidated YOLOv5 model code + torch.load shims
   masking.py               # Mask preview + SD inpaint input preparation
