@@ -94,7 +94,7 @@ class InpaintOrchestrator:
             return
 
         ws_recv = asyncio.ensure_future(self._ws.receive_text())
-        pipe_task = None
+        pipe_task = loop.run_in_executor(None, parent_conn.recv)
 
         try:
             while True:
@@ -104,8 +104,6 @@ class InpaintOrchestrator:
                     worker.cancel()
                     await self._send_model(ErrorResponse(error="Generation timed out"))
                     break
-
-                pipe_task = loop.run_in_executor(None, parent_conn.recv)
 
                 done, pending = await asyncio.wait(
                     [pipe_task, ws_recv],
@@ -137,6 +135,8 @@ class InpaintOrchestrator:
                                 elapsed=round(elapsed, 1),
                             )
                         )
+                        # Recreate pipe_task only after it completes
+                        pipe_task = loop.run_in_executor(None, parent_conn.recv)
                     elif msg["type"] == "done":
                         elapsed = time.time() - start_time
                         await self._send_model(
@@ -162,9 +162,6 @@ class InpaintOrchestrator:
                         pass
                     # Start listening for the next WS message
                     ws_recv = asyncio.ensure_future(self._ws.receive_text())
-
-                if pipe_task in pending:
-                    pipe_task.cancel()
         finally:
             # Clean up the pending ws receiver
             if not ws_recv.done():
