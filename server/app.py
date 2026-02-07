@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from server.config import settings
 from server.detectors import FaceBiSeNetDetector, YOLOv8SegDetector, BaseDetector
+from server.enums import DetectionMode, ModelStatus
 from server.masking import create_mask_preview
 from server.inpainting import InpaintingEngine
 from server.inpaint_orchestrator import InpaintOrchestrator
@@ -32,7 +33,7 @@ class AppState:
     captured_frame: Optional[np.ndarray] = None
     captured_mask: Optional[np.ndarray] = None
     lock: threading.Lock = field(default_factory=threading.Lock)
-    inpaint_status: str = "loading"
+    inpaint_status: str = ModelStatus.LOADING
     inpaint_status_detail: str = "Starting up..."
 
 
@@ -57,11 +58,11 @@ def _load_inpaint_model():
             state.inpaint_engine = engine
         state.inpaint_engine.load(status_callback=on_status)
         with state.lock:
-            state.inpaint_status = "ready"
+            state.inpaint_status = ModelStatus.READY
             state.inpaint_status_detail = "Model ready"
     except Exception:
         with state.lock:
-            state.inpaint_status = "error"
+            state.inpaint_status = ModelStatus.ERROR
             state.inpaint_status_detail = "Failed to load model"
         logger.exception("Failed to load inpainting model")
 
@@ -69,7 +70,7 @@ def _load_inpaint_model():
 def _prewarm_face_detector():
     """Pre-load the face detector in a background thread."""
     try:
-        get_detector_sync("face")
+        get_detector_sync(DetectionMode.FACE)
     except Exception:
         logger.exception("Failed to pre-warm face detector")
 
@@ -77,8 +78,8 @@ def _prewarm_face_detector():
 def get_detector_sync(mode: str, target_classes=None) -> BaseDetector:
     """Get or create a detector by mode name (thread-safe, lazy-loading)."""
     with state.detector_lock:
-        if mode == "face":
-            if "face" not in state.detectors:
+        if mode == DetectionMode.FACE:
+            if DetectionMode.FACE not in state.detectors:
                 det = FaceBiSeNetDetector(
                     yolo_weights=settings.WEIGHTS_PATH,
                     bisenet_weights=settings.BISENET_WEIGHTS_PATH,
@@ -86,23 +87,23 @@ def get_detector_sync(mode: str, target_classes=None) -> BaseDetector:
                     img_size=settings.IMG_SIZE,
                 )
                 det.load()
-                state.detectors["face"] = det
-            return state.detectors["face"]
+                state.detectors[DetectionMode.FACE] = det
+            return state.detectors[DetectionMode.FACE]
 
-        elif mode == "object":
-            if "object" not in state.detectors:
+        elif mode == DetectionMode.OBJECT:
+            if DetectionMode.OBJECT not in state.detectors:
                 det = YOLOv8SegDetector(
                     model_variant=settings.YOLOV8_SEG_MODEL,
                     device=settings.DEVICE,
                     target_classes=target_classes or [0],
                 )
                 det.load()
-                state.detectors["object"] = det
+                state.detectors[DetectionMode.OBJECT] = det
             else:
                 # Update target classes if the detector already exists.
                 if target_classes is not None:
-                    state.detectors["object"].set_target_classes(target_classes)
-            return state.detectors["object"]
+                    state.detectors[DetectionMode.OBJECT].set_target_classes(target_classes)
+            return state.detectors[DetectionMode.OBJECT]
 
         else:
             raise ValueError(f"Unknown detection mode: {mode}")
@@ -232,7 +233,7 @@ async def api_status():
         inpaint_detail = state.inpaint_status_detail
     return JSONResponse({
         "detectors": loaded,
-        "detection": "ready" if any(loaded.values()) else "loading",
+        "detection": ModelStatus.READY if any(loaded.values()) else ModelStatus.LOADING,
         "inpaint": inpaint,
         "inpaint_detail": inpaint_detail,
     })
