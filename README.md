@@ -27,15 +27,15 @@ The inpainting model (~4 GB) downloads automatically on first run and is cached 
 
 ```
 Browser                              Docker Container
-+--------------------------+         +-------------------------------+
++--------------------------+         +--------------------------------+
 | Webcam (getUserMedia)    | WS/JPEG | FastAPI + Uvicorn              |
 | Mode selector (face/obj) | ------> | /ws/detect -> detectors/       |
 | Detection + Mask display | <------ |   face: YOLOv5 + BiSeNet       |
-|                          |         |   object: YOLOv8-seg            |
+|                          |         |   object: YOLOv8-seg           |
 | Prompt + Generate        | WS/JSON |                                |
-| Progress bar + Cancel    | ------> | /ws/inpaint -> forked SD child  |
-| Generated image display  | <------ |   progress + result             |
-+--------------------------+         +-------------------------------+
+| Progress bar + Cancel    | ------> | /ws/inpaint -> forked SD child |
+| Generated image display  | <------ |   progress + result            |
++--------------------------+         +--------------------------------+
 ```
 
 - **Detection**: Multi-model system via `server/detectors/` package
