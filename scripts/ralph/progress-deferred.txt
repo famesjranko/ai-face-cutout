@@ -1,0 +1,19 @@
+Task 1 - Detector registry pattern: DONE (eccc4e9)
+  - Added detection_mode() abstract method to BaseDetector
+  - Implemented detection_mode() on FaceBiSeNetDetector and YOLOv8SegDetector
+  - Added _SETTINGS_MAP in __init__.py for config→constructor kwargs mapping
+  - Enhanced create_detector() to accept settings object
+  - Refactored get_detector_sync() to use registry lookup (no more if/elif)
+  - app.py no longer imports individual detector classes
+  - Quality gate: py_compile passed on app.py, __init__.py, base.py
+
+Task 2 - WebSocket message schemas with Pydantic: DONE
+  - Created server/schemas.py with Pydantic BaseModel classes:
+    DetectionResponse, InpaintStarted, InpaintProgress, InpaintDone, InpaintCancelled, ErrorResponse
+  - Updated ws_detect in app.py to use DetectionResponse and ErrorResponse
+  - Updated ws_inpaint error in app.py to use ErrorResponse
+  - Refactored InpaintOrchestrator: replaced all dict construction with schema models
+  - Renamed _send() to _send_model() using model_dump_json() instead of json.dumps()
+  - Added from __future__ import annotations to inpaint_orchestrator.py
+  - JSON keys unchanged — frontend contract preserved
+  - Quality gate: py_compile passed on schemas.py, app.py, inpaint_orchestrator.py

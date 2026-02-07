@@ -1,5 +1,7 @@
 """Encapsulates the inpainting generation lifecycle."""
 
+from __future__ import annotations
+
 import asyncio
 import base64
 import io
@@ -8,10 +10,18 @@ import logging
 import time
 
 from fastapi import WebSocket
+from pydantic import BaseModel
 
 from server.config import settings
 from server.inpainting import GenerationCancelled
 from server.masking import create_inpaint_inputs
+from server.schemas import (
+    ErrorResponse,
+    InpaintCancelled,
+    InpaintDone,
+    InpaintProgress,
+    InpaintStarted,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,13 +45,13 @@ class InpaintOrchestrator:
         prompt = req.get("prompt", "")
 
         if not prompt:
-            await self._send({"error": "No prompt provided"})
+            await self._send_model(ErrorResponse(error="No prompt provided"))
             return
 
         with self._state.lock:
             engine = self._state.inpaint_engine
         if engine is None or engine.pipe is None:
-            await self._send({"error": "Inpainting model still loading, please wait..."})
+            await self._send_model(ErrorResponse(error="Inpainting model still loading, please wait..."))
             return
 
         with self._state.lock:
@@ -49,17 +59,17 @@ class InpaintOrchestrator:
             mask = self._state.captured_mask
 
         if frame is None:
-            await self._send({"error": "No frame captured. Click Capture first."})
+            await self._send_model(ErrorResponse(error="No frame captured. Click Capture first."))
             return
 
         if mask is None or mask.max() == 0:
-            await self._send({"error": "No detection in captured frame"})
+            await self._send_model(ErrorResponse(error="No detection in captured frame"))
             return
 
         loop = asyncio.get_event_loop()
         inputs = await loop.run_in_executor(None, create_inpaint_inputs, frame, mask)
         if inputs is None:
-            await self._send({"error": "Failed to create mask"})
+            await self._send_model(ErrorResponse(error="Failed to create mask"))
             return
 
         image_pil, mask_pil = inputs
@@ -67,7 +77,7 @@ class InpaintOrchestrator:
 
     async def _run_generation(self, engine, image_pil, mask_pil, prompt, loop):
         """Execute generation with progress streaming and cancel support."""
-        await self._send({"status": "started", "total_steps": settings.INPAINT_STEPS})
+        await self._send_model(InpaintStarted(total_steps=settings.INPAINT_STEPS))
 
         start_time = time.time()
         progress_queue: asyncio.Queue = asyncio.Queue()
@@ -76,7 +86,7 @@ class InpaintOrchestrator:
             elapsed = time.time() - start_time
             loop.call_soon_threadsafe(
                 progress_queue.put_nowait,
-                {"status": "progress", "step": step, "total_steps": total, "elapsed": round(elapsed, 1)},
+                InpaintProgress(step=step, total_steps=total, elapsed=round(elapsed, 1)),
             )
 
         gen_task = loop.run_in_executor(
@@ -111,7 +121,7 @@ class InpaintOrchestrator:
                         ws_recv = asyncio.ensure_future(self._ws.receive_text())
                 elif task is progress_get:
                     try:
-                        await self._send(task.result())
+                        await self._send_model(task.result())
                     except Exception:
                         pass
 
@@ -129,13 +139,13 @@ class InpaintOrchestrator:
             cancelled = True
 
         if cancelled:
-            await self._send({"status": "cancelled"})
+            await self._send_model(InpaintCancelled())
             return
 
         # Drain remaining progress messages.
         while not progress_queue.empty():
             progress_msg = progress_queue.get_nowait()
-            await self._send(progress_msg)
+            await self._send_model(progress_msg)
 
         # Encode result as base64 JPEG.
         buf = io.BytesIO()
@@ -143,7 +153,7 @@ class InpaintOrchestrator:
         result_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
 
         elapsed = round(time.time() - start_time, 1)
-        await self._send({"status": "done", "image": result_b64, "elapsed": elapsed})
+        await self._send_model(InpaintDone(image=result_b64, elapsed=elapsed))
 
-    async def _send(self, data: dict):
-        await self._ws.send_text(json.dumps(data))
+    async def _send_model(self, model: BaseModel):
+        await self._ws.send_text(model.model_dump_json())

@@ -19,6 +19,7 @@ from server.enums import DetectionMode, ModelStatus
 from server.masking import create_mask_preview
 from server.inpainting import InpaintingEngine
 from server.inpaint_orchestrator import InpaintOrchestrator
+from server.schemas import DetectionResponse, ErrorResponse
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +147,7 @@ async def ws_detect(ws: WebSocket):
             None, get_detector_sync, mode, target_classes
         )
     except Exception as exc:
-        await ws.send_text(json.dumps({"error": f"Failed to load detector: {exc}"}))
+        await ws.send_text(ErrorResponse(error=f"Failed to load detector: {exc}").model_dump_json())
         await ws.close()
         return
 
@@ -174,13 +175,13 @@ async def ws_detect(ws: WebSocket):
                 )
 
                 # Send back annotated + mask as base64 JPEG.
-                resp = {
-                    "detect": _encode_frame_jpeg(result.annotated_frame),
-                    "mask": _encode_frame_jpeg(mask_preview),
-                    "count": result.count,
-                    "label": result.label,
-                }
-                await ws.send_text(json.dumps(resp))
+                resp = DetectionResponse(
+                    detect=_encode_frame_jpeg(result.annotated_frame),
+                    mask=_encode_frame_jpeg(mask_preview),
+                    count=result.count,
+                    label=result.label,
+                )
+                await ws.send_text(resp.model_dump_json())
             except Exception:
                 logger.exception("Error processing detection frame")
     except WebSocketDisconnect:
@@ -197,7 +198,7 @@ async def ws_inpaint(ws: WebSocket):
             try:
                 req = json.loads(msg)
             except json.JSONDecodeError:
-                await ws.send_text(json.dumps({"error": "Invalid JSON"}))
+                await ws.send_text(ErrorResponse(error="Invalid JSON").model_dump_json())
                 continue
 
             if req.get("action") == "cancel":
