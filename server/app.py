@@ -43,22 +43,27 @@ state = AppState()
 def _load_inpaint_model():
     """Load SD inpainting model in background thread."""
     def on_status(status, detail):
-        state.inpaint_status = status
-        state.inpaint_status_detail = detail
+        with state.lock:
+            state.inpaint_status = status
+            state.inpaint_status_detail = detail
 
     try:
-        state.inpaint_engine = InpaintingEngine(
+        engine = InpaintingEngine(
             model_id=settings.INPAINT_MODEL,
             device=settings.DEVICE,
             num_steps=settings.INPAINT_STEPS,
             guidance_scale=settings.GUIDANCE_SCALE,
         )
+        with state.lock:
+            state.inpaint_engine = engine
         state.inpaint_engine.load(status_callback=on_status)
-        state.inpaint_status = "ready"
-        state.inpaint_status_detail = "Model ready"
+        with state.lock:
+            state.inpaint_status = "ready"
+            state.inpaint_status_detail = "Model ready"
     except Exception:
-        state.inpaint_status = "error"
-        state.inpaint_status_detail = "Failed to load model"
+        with state.lock:
+            state.inpaint_status = "error"
+            state.inpaint_status_detail = "Failed to load model"
         logger.exception("Failed to load inpainting model")
 
 
@@ -211,8 +216,10 @@ async def ws_inpaint(ws: WebSocket):
                 continue
 
             if req.get("action") == "cancel":
-                if state.inpaint_engine is not None:
-                    state.inpaint_engine.cancel()
+                with state.lock:
+                    engine = state.inpaint_engine
+                if engine is not None:
+                    engine.cancel()
                 continue
 
             prompt = req.get("prompt", "")
@@ -221,7 +228,9 @@ async def ws_inpaint(ws: WebSocket):
                 await ws.send_text(json.dumps({"error": "No prompt provided"}))
                 continue
 
-            if state.inpaint_engine is None or state.inpaint_engine.pipe is None:
+            with state.lock:
+                engine = state.inpaint_engine
+            if engine is None or engine.pipe is None:
                 await ws.send_text(json.dumps({"error": "Inpainting model still loading, please wait..."}))
                 continue
 
@@ -268,7 +277,7 @@ async def ws_inpaint(ws: WebSocket):
 
             # Run generation in executor.
             gen_task = loop.run_in_executor(
-                None, state.inpaint_engine.generate, image_pil, mask_pil, prompt, on_progress
+                None, engine.generate, image_pil, mask_pil, prompt, on_progress
             )
 
             # Listen for cancel messages while sending progress updates.
@@ -292,7 +301,7 @@ async def ws_inpaint(ws: WebSocket):
                         try:
                             cancel_msg = json.loads(task.result())
                             if cancel_msg.get("action") == "cancel":
-                                state.inpaint_engine.cancel()
+                                engine.cancel()
                                 cancelled = True
                         except Exception:
                             pass
@@ -341,18 +350,23 @@ async def ws_inpaint(ws: WebSocket):
 
     except WebSocketDisconnect:
         # If disconnected during generation, cancel it.
-        if state.inpaint_engine is not None:
-            state.inpaint_engine.cancel()
+        with state.lock:
+            engine = state.inpaint_engine
+        if engine is not None:
+            engine.cancel()
 
 
 @app.get("/api/status")
 async def api_status():
     loaded = {name: det.is_loaded for name, det in state.detectors.items()}
+    with state.lock:
+        inpaint = state.inpaint_status
+        inpaint_detail = state.inpaint_status_detail
     return JSONResponse({
         "detectors": loaded,
         "detection": "ready" if any(loaded.values()) else "loading",
-        "inpaint": state.inpaint_status,
-        "inpaint_detail": state.inpaint_status_detail,
+        "inpaint": inpaint,
+        "inpaint_detail": inpaint_detail,
     })
 
 
