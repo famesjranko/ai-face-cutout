@@ -18,7 +18,7 @@ from server.detectors import BaseDetector, create_detector
 from server.enums import DetectionMode, ModelStatus
 from server.masking import create_mask_preview
 from server.inpaint_orchestrator import InpaintOrchestrator
-from server.inpaint_worker import InpaintWorkerManager
+from server.inpainters import BaseInpainter, StableDiffusionInpainter
 from server.schemas import DetectionResponse, ErrorResponse
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 class AppState:
     detectors: Dict[str, BaseDetector] = field(default_factory=dict)
     detector_lock: threading.Lock = field(default_factory=threading.Lock)
-    inpaint_worker: Optional[InpaintWorkerManager] = None
+    inpainter: Optional[BaseInpainter] = None
     latest_frame: Optional[np.ndarray] = None
     latest_mask: Optional[np.ndarray] = None
     captured_frame: Optional[np.ndarray] = None
@@ -42,22 +42,22 @@ state = AppState()
 
 
 def _load_inpaint_model():
-    """Load SD inpainting model in background thread."""
+    """Load inpainting backend in background thread."""
     def on_status(status, detail):
         with state.lock:
             state.inpaint_status = status
             state.inpaint_status_detail = detail
 
     try:
-        worker = InpaintWorkerManager(
+        inpainter = StableDiffusionInpainter(
             model_id=settings.INPAINT_MODEL,
             device=settings.DEVICE,
             num_steps=settings.INPAINT_STEPS,
             guidance_scale=settings.GUIDANCE_SCALE,
         )
         with state.lock:
-            state.inpaint_worker = worker
-        worker.load(status_callback=on_status)
+            state.inpainter = inpainter
+        inpainter.load(status_callback=on_status)
         with state.lock:
             state.inpaint_status = ModelStatus.READY
             state.inpaint_status_detail = "Model ready"
@@ -108,8 +108,8 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     state.detectors.clear()
-    if state.inpaint_worker:
-        state.inpaint_worker.shutdown()
+    if state.inpainter:
+        state.inpainter.shutdown()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -142,7 +142,7 @@ async def ws_detect(ws: WebSocket):
     mode, target_classes = _parse_detect_params(query)
 
     # Lazy-load the requested detector (may block on first use).
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         detector = await loop.run_in_executor(
             None, get_detector_sync, mode, target_classes
@@ -239,7 +239,7 @@ async def api_capture():
         count = int(mask.max() > 0) if mask is not None else 0
 
     # Build mask preview of the captured frame for the client.
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     if state.captured_mask is not None and state.captured_mask.max() > 0:
         mask_preview = await loop.run_in_executor(
             None, create_mask_preview, state.captured_frame, state.captured_mask

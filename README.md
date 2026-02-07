@@ -77,7 +77,10 @@ server/
   yolov5_compat.py         # Consolidated YOLOv5 model code + torch.load shims
   masking.py               # Mask preview + SD inpaint input preparation
   inpaint_orchestrator.py  # Generation lifecycle, progress streaming, cancellation
-  inpaint_worker.py        # Forked child process for SD inference
+  inpainters/              # Pluggable inpainting backend package
+    __init__.py            # Public exports
+    base.py                # BaseInpainter ABC + message dataclasses
+    stable_diffusion.py    # Forked-process SD inference backend
   enums.py                 # DetectionMode, ModelStatus enums
   schemas.py               # Pydantic models for WebSocket messages
   run.py                   # Entry point
