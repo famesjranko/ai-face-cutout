@@ -19,8 +19,6 @@ COPY requirements-web.txt .
 RUN pip install --no-cache-dir -r requirements-web.txt
 
 # Copy application code
-COPY models/ models/
-COPY utils/ utils/
 COPY weights/ weights/
 COPY server/ server/
 COPY static/ static/
