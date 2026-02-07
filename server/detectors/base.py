@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+import threading
 
 import numpy as np
 
@@ -22,13 +23,21 @@ class DetectionResult:
 class BaseDetector(ABC):
     """Common interface for all detection/segmentation backends."""
 
+    def __init__(self):
+        self._inference_lock = threading.Lock()
+
     @abstractmethod
     def load(self) -> None:
         """Load model weights into memory."""
 
     @abstractmethod
+    def _detect_impl(self, frame_bgr: np.ndarray) -> DetectionResult:
+        """Run detection on a single BGR frame (override in subclass)."""
+
     def detect(self, frame_bgr: np.ndarray) -> DetectionResult:
-        """Run detection on a single BGR frame."""
+        """Thread-safe detection — acquires inference lock."""
+        with self._inference_lock:
+            return self._detect_impl(frame_bgr)
 
     @property
     @abstractmethod
