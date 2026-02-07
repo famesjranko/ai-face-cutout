@@ -48,3 +48,8 @@ class BaseDetector(ABC):
     @abstractmethod
     def is_loaded(self) -> bool:
         """Whether the model is ready for inference."""
+
+    @staticmethod
+    @abstractmethod
+    def detection_mode() -> str:
+        """Return the DetectionMode value this detector handles."""

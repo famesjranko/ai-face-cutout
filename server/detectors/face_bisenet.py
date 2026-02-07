@@ -10,6 +10,7 @@ import torchvision.transforms as transforms
 
 from server.detectors.base import BaseDetector, DetectionResult
 from server.detectors.bisenet_model import BiSeNet
+from server.enums import DetectionMode
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,10 @@ class FaceBiSeNetDetector(BaseDetector):
         self._bisenet = None
 
     # -- BaseDetector interface ------------------------------------------------
+
+    @staticmethod
+    def detection_mode() -> str:
+        return DetectionMode.FACE
 
     @property
     def name(self) -> str:
