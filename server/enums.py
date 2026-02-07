@@ -10,3 +10,7 @@ class ModelStatus(str, Enum):
     LOADING = "loading"
     READY = "ready"
     ERROR = "error"
+
+
+class InpaintBackend(str, Enum):
+    STABLE_DIFFUSION = "stable_diffusion"

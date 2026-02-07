@@ -18,7 +18,7 @@ from server.detectors import BaseDetector, create_detector
 from server.enums import DetectionMode, ModelStatus
 from server.masking import create_mask_preview
 from server.inpaint_orchestrator import InpaintOrchestrator
-from server.inpaint_worker import InpaintWorkerManager
+from server.inpainters import BaseInpainter, create_inpainter
 from server.schemas import DetectionResponse, ErrorResponse
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 class AppState:
     detectors: Dict[str, BaseDetector] = field(default_factory=dict)
     detector_lock: threading.Lock = field(default_factory=threading.Lock)
-    inpaint_worker: Optional[InpaintWorkerManager] = None
+    inpainter: Optional[BaseInpainter] = None
     latest_frame: Optional[np.ndarray] = None
     latest_mask: Optional[np.ndarray] = None
     captured_frame: Optional[np.ndarray] = None
@@ -42,22 +42,19 @@ state = AppState()
 
 
 def _load_inpaint_model():
-    """Load SD inpainting model in background thread."""
+    """Load inpainting backend in background thread."""
     def on_status(status, detail):
         with state.lock:
             state.inpaint_status = status
             state.inpaint_status_detail = detail
 
     try:
-        worker = InpaintWorkerManager(
-            model_id=settings.INPAINT_MODEL,
-            device=settings.DEVICE,
-            num_steps=settings.INPAINT_STEPS,
-            guidance_scale=settings.GUIDANCE_SCALE,
+        inpainter = create_inpainter(
+            backend=settings.INPAINT_BACKEND, settings=settings
         )
         with state.lock:
-            state.inpaint_worker = worker
-        worker.load(status_callback=on_status)
+            state.inpainter = inpainter
+        inpainter.load(status_callback=on_status)
         with state.lock:
             state.inpaint_status = ModelStatus.READY
             state.inpaint_status_detail = "Model ready"
@@ -108,8 +105,8 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     state.detectors.clear()
-    if state.inpaint_worker:
-        state.inpaint_worker.shutdown()
+    if state.inpainter:
+        state.inpainter.shutdown()
 
 
 app = FastAPI(lifespan=lifespan)

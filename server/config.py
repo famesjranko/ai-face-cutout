@@ -15,6 +15,7 @@ class Settings:
     )
     INPAINT_STEPS: int = int(os.environ.get("INPAINT_STEPS", "8"))
     GUIDANCE_SCALE: float = float(os.environ.get("GUIDANCE_SCALE", "7.5"))
+    INPAINT_BACKEND: str = os.environ.get("INPAINT_BACKEND", "stable_diffusion")
 
 
 settings = Settings()
