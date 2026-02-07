@@ -18,7 +18,7 @@ from server.detectors import BaseDetector, create_detector
 from server.enums import DetectionMode, ModelStatus
 from server.masking import create_mask_preview
 from server.inpaint_orchestrator import InpaintOrchestrator
-from server.inpainters import BaseInpainter, create_inpainter
+from server.inpainters import BaseInpainter, StableDiffusionInpainter
 from server.schemas import DetectionResponse, ErrorResponse
 
 logger = logging.getLogger(__name__)
@@ -49,8 +49,11 @@ def _load_inpaint_model():
             state.inpaint_status_detail = detail
 
     try:
-        inpainter = create_inpainter(
-            backend=settings.INPAINT_BACKEND, settings=settings
+        inpainter = StableDiffusionInpainter(
+            model_id=settings.INPAINT_MODEL,
+            device=settings.DEVICE,
+            num_steps=settings.INPAINT_STEPS,
+            guidance_scale=settings.GUIDANCE_SCALE,
         )
         with state.lock:
             state.inpainter = inpainter
@@ -139,7 +142,7 @@ async def ws_detect(ws: WebSocket):
     mode, target_classes = _parse_detect_params(query)
 
     # Lazy-load the requested detector (may block on first use).
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         detector = await loop.run_in_executor(
             None, get_detector_sync, mode, target_classes
@@ -236,7 +239,7 @@ async def api_capture():
         count = int(mask.max() > 0) if mask is not None else 0
 
     # Build mask preview of the captured frame for the client.
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     if state.captured_mask is not None and state.captured_mask.max() > 0:
         mask_preview = await loop.run_in_executor(
             None, create_mask_preview, state.captured_frame, state.captured_mask

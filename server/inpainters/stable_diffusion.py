@@ -63,7 +63,8 @@ def _worker_fn(child_conn, image_pil, mask_pil, prompt, num_steps, guidance_scal
         encoded_string = base64.b64encode(buf.getvalue()).decode("utf-8")
         child_conn.send({"type": "done", "image_b64": encoded_string})
     except Exception as e:
-        child_conn.send({"type": "error", "message": str(e)})
+        logger.error("Worker error: %s", e, exc_info=True)
+        child_conn.send({"type": "error", "message": "Generation failed"})
     finally:
         child_conn.close()
 
@@ -84,6 +85,7 @@ class StableDiffusionInpainter(BaseInpainter):
         self.guidance_scale = guidance_scale
         self._process: Optional[multiprocessing.Process] = None
         self._parent_conn = None
+        self._lock = asyncio.Lock()
 
     # --- BaseInpainter interface ---
 
@@ -143,10 +145,10 @@ class StableDiffusionInpainter(BaseInpainter):
                 try:
                     msg = await loop.run_in_executor(None, parent_conn.recv)
                 except (EOFError, OSError):
-                    # Child died — check exit code to distinguish cancel vs crash
-                    exitcode = self._process.exitcode if self._process else None
+                    async with self._lock:
+                        proc = self._process
+                    exitcode = proc.exitcode if proc else None
                     if exitcode is not None and exitcode == -15:
-                        # SIGTERM — this was a cancel
                         logger.info("Child terminated by SIGTERM (cancel)")
                     else:
                         logger.error("Child process crashed (exitcode=%s)", exitcode)
@@ -162,46 +164,24 @@ class StableDiffusionInpainter(BaseInpainter):
                     yield InpaintErrorMsg(message=msg["message"])
                     return
         finally:
-            self._cleanup_child()
+            async with self._lock:
+                self._reap_child(timeout=5)
+                self._close_pipe()
 
     async def cancel(self) -> None:
-        if self._process is None:
-            return
-
-        pid = self._process.pid
-        self._process.terminate()
-        self._process.join(timeout=0.5)
-
-        if self._process.is_alive():
-            logger.warning("Child %d did not exit after SIGTERM, sending SIGKILL", pid)
-            self._process.kill()
-            self._process.join(timeout=1.0)
-
-        logger.info("Reaped child process %d (exitcode=%s)", pid, self._process.exitcode)
-
-        if self._parent_conn is not None:
-            try:
-                self._parent_conn.close()
-            except OSError:
-                pass
-
-        self._process = None
-        self._parent_conn = None
+        async with self._lock:
+            if self._process is None:
+                return
+            self._process.terminate()
+            self._reap_child(timeout=0.5)
+            self._close_pipe()
 
     def shutdown(self) -> None:
-        if self._process is not None and self._process.is_alive():
-            # cancel is sync-safe for shutdown — just kills the process
-            pid = self._process.pid
-            self._process.terminate()
-            self._process.join(timeout=0.5)
-            if self._process.is_alive():
-                self._process.kill()
-                self._process.join(timeout=1.0)
-            logger.info("Shutdown: reaped child %d (exitcode=%s)", pid, self._process.exitcode)
-
-    @property
-    def name(self) -> str:
-        return "stable_diffusion"
+        if self._process is None:
+            return
+        self._process.terminate()
+        self._reap_child(timeout=0.5)
+        self._close_pipe()
 
     @property
     def is_ready(self) -> bool:
@@ -211,26 +191,26 @@ class StableDiffusionInpainter(BaseInpainter):
     def total_steps(self) -> int:
         return self._num_steps
 
-    @staticmethod
-    def backend_id() -> str:
-        return "stable_diffusion"
-
     # --- Internal helpers ---
 
-    def _cleanup_child(self):
-        """Join a naturally-exited child and close the pipe."""
-        if self._process is not None:
-            pid = self._process.pid
-            self._process.join(timeout=5)
-            if self._process.is_alive():
-                logger.warning("Child %d still alive after cleanup join, killing", pid)
-                self._process.kill()
-                self._process.join(timeout=1.0)
-            logger.info("Reaped child process %d (exitcode=%s)", pid, self._process.exitcode)
+    def _reap_child(self, timeout: float) -> None:
+        """Wait for child process to exit, escalating to SIGKILL if needed."""
+        if self._process is None:
+            return
+        pid = self._process.pid
+        self._process.join(timeout=timeout)
+        if self._process.is_alive():
+            logger.warning("Child %d did not exit after %gs, sending SIGKILL", pid, timeout)
+            self._process.kill()
+            self._process.join(timeout=1.0)
+        logger.info("Reaped child process %d (exitcode=%s)", pid, self._process.exitcode)
+        self._process = None
+
+    def _close_pipe(self) -> None:
+        """Close the parent end of the pipe and clear the reference."""
         if self._parent_conn is not None:
             try:
                 self._parent_conn.close()
             except OSError:
                 pass
-        self._process = None
-        self._parent_conn = None
+            self._parent_conn = None

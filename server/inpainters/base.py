@@ -44,7 +44,7 @@ class BaseInpainter(ABC):
     """
 
     @abstractmethod
-    def load(self, status_callback: Optional[Callable] = None) -> None:
+    def load(self, status_callback: Optional[Callable[[str, str], None]] = None) -> None:
         """Load model weights / initialise the backend.
 
         *status_callback(status, detail)* is called to report loading
@@ -76,11 +76,6 @@ class BaseInpainter(ABC):
 
     @property
     @abstractmethod
-    def name(self) -> str:
-        """Short human-readable identifier, e.g. ``"stable_diffusion"``."""
-
-    @property
-    @abstractmethod
     def is_ready(self) -> bool:
         """Whether the backend is loaded and ready to generate."""
 
@@ -89,7 +84,3 @@ class BaseInpainter(ABC):
     def total_steps(self) -> int:
         """Number of inference steps (1 for single-shot API backends)."""
 
-    @staticmethod
-    @abstractmethod
-    def backend_id() -> str:
-        """Registry key matching :class:`InpaintBackend` enum value."""
