@@ -13,10 +13,10 @@
   <header>
     <div class="header-brand">
       <h1>Face Inpainting</h1>
-      <span class="header-sub">YOLOv5 Detection &middot; Stable Diffusion</span>
+      <span class="header-sub" id="header-sub">Segmentation &middot; Stable Diffusion</span>
     </div>
     <div class="header-status">
-      <div class="status-chip loading" id="chip-yolo">
+      <div class="status-chip loading" id="chip-detect">
         <span class="status-dot"></span>
         <span>Detection</span>
       </div>
@@ -36,11 +36,32 @@
   </div>
 
   <main>
-    <!-- Row 1: Camera controls -->
+    <!-- Row 1: Camera controls + mode selector -->
     <div class="toolbar">
       <div class="toolbar-group">
         <select id="cam-select"><option value="">Select camera</option></select>
         <button id="btn-cam" class="btn-secondary">Start Webcam</button>
+      </div>
+      <div class="toolbar-group">
+        <select id="mode-select">
+          <option value="face">Face Segmentation</option>
+          <option value="object">Person / Object</option>
+        </select>
+        <select id="class-select" style="display:none">
+          <option value="0">Person</option>
+          <option value="1">Bicycle</option>
+          <option value="2">Car</option>
+          <option value="3">Motorcycle</option>
+          <option value="5">Bus</option>
+          <option value="7">Truck</option>
+          <option value="14">Bird</option>
+          <option value="15">Cat</option>
+          <option value="16">Dog</option>
+          <option value="17">Horse</option>
+          <option value="24">Backpack</option>
+          <option value="25">Umbrella</option>
+          <option value="28">Suitcase</option>
+        </select>
       </div>
       <span class="toolbar-status" id="status-text">Webcam off</span>
     </div>

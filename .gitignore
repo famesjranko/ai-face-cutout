@@ -4,3 +4,8 @@ venv/
 .env
 .planning/
 .claude/
+
+# Auto-downloaded model weights
+weights/bisenet_face_parsing.pth
+*.pt
+!weights/yolov5n-0.5.pt

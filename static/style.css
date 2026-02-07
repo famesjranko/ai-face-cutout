@@ -195,6 +195,11 @@ main {
   gap: 0.5rem;
 }
 
+.toolbar-group + .toolbar-group {
+  padding-left: 0.75rem;
+  border-left: 1px solid var(--border);
+}
+
 .toolbar-status {
   font-size: 0.78rem;
   color: var(--text-muted);
@@ -260,6 +265,14 @@ button:disabled {
 .btn-small {
   padding: 0.3rem 0.7rem;
   font-size: 0.72rem;
+}
+
+.btn-cancel {
+  background: var(--error);
+}
+.btn-cancel:hover:not(:disabled) {
+  background: #ef4444;
+  box-shadow: 0 2px 16px var(--error-dim);
 }
 
 /* ── Detection + Mask row (two columns) ────────────── */

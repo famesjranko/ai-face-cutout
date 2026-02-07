@@ -7,6 +7,10 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 
+class GenerationCancelled(Exception):
+    """Raised when the user cancels an in-progress generation."""
+
+
 class InpaintingEngine:
     def __init__(self, model_id: str, device: str, num_steps: int, guidance_scale: float):
         self.model_id = model_id
@@ -14,6 +18,7 @@ class InpaintingEngine:
         self.num_steps = num_steps
         self.guidance_scale = guidance_scale
         self.pipe = None
+        self._cancel = False
 
     def load(self, status_callback=None):
         from diffusers import StableDiffusionInpaintPipeline, DPMSolverMultistepScheduler
@@ -42,6 +47,10 @@ class InpaintingEngine:
 
         logger.info("Inpainting model loaded.")
 
+    def cancel(self):
+        """Request cancellation of the current generation."""
+        self._cancel = True
+
     def generate(
         self,
         image: Image.Image,
@@ -52,7 +61,11 @@ class InpaintingEngine:
         if self.pipe is None:
             raise RuntimeError("Inpainting model not loaded. Call load() first.")
 
+        self._cancel = False
+
         def step_callback(pipe, step, timestep, callback_kwargs):
+            if self._cancel:
+                raise GenerationCancelled()
             if progress_callback:
                 progress_callback(step + 1, self.num_steps)
             return callback_kwargs
