@@ -23,6 +23,8 @@ docker compose up --build
 
 Open **http://localhost:8000** in your browser.
 
+![Graphic](imgs/dashboard.png)
+
 The inpainting model (~4 GB) downloads automatically on first run and is cached in a Docker volume for subsequent starts.
 
 ## Architecture
