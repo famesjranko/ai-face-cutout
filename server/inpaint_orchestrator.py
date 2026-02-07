@@ -36,10 +36,14 @@ class InpaintOrchestrator:
         self._state = state
 
     async def handle_cancel(self):
-        """Cancel any in-progress generation."""
+        """Cancel any in-progress generation.  Safe to call at any time."""
         worker = self._state.inpaint_worker
-        if worker is not None:
+        if worker is None:
+            return
+        try:
             worker.cancel()
+        except Exception:
+            logger.exception("Error during cancel")
 
     async def handle_generate(self, req: dict):
         """Validate inputs and run the generation lifecycle."""
@@ -75,6 +79,8 @@ class InpaintOrchestrator:
         image_pil, mask_pil = inputs
         await self._run_generation(worker, image_pil, mask_pil, prompt, loop)
 
+    _GENERATION_TIMEOUT = 600  # 10 minutes
+
     async def _run_generation(self, worker, image_pil, mask_pil, prompt, loop):
         """Execute generation with progress streaming and cancel support."""
         await self._send_model(InpaintStarted(total_steps=settings.INPAINT_STEPS))
@@ -92,6 +98,13 @@ class InpaintOrchestrator:
 
         try:
             while True:
+                # Timeout check
+                if time.time() - start_time > self._GENERATION_TIMEOUT:
+                    logger.warning("Generation timed out after %ds", self._GENERATION_TIMEOUT)
+                    worker.cancel()
+                    await self._send_model(ErrorResponse(error="Generation timed out"))
+                    break
+
                 pipe_task = loop.run_in_executor(None, parent_conn.recv)
 
                 done, pending = await asyncio.wait(
@@ -107,8 +120,9 @@ class InpaintOrchestrator:
                         exitcode = worker._process.exitcode if worker._process else None
                         if exitcode is not None and exitcode == -15:
                             # SIGTERM — this was a cancel
-                            pass
+                            logger.info("Child terminated by SIGTERM (cancel)")
                         else:
+                            logger.error("Child process crashed (exitcode=%s)", exitcode)
                             await self._send_model(
                                 ErrorResponse(error="Generation process crashed")
                             )
@@ -167,7 +181,10 @@ class InpaintOrchestrator:
                 except (asyncio.CancelledError, Exception):
                     pass
             # Join child process and close pipe
-            worker.cleanup_child()
+            try:
+                worker.cleanup_child()
+            except Exception:
+                logger.exception("Error during child cleanup")
 
     async def _send_model(self, model: BaseModel):
         await self._ws.send_text(model.model_dump_json())
