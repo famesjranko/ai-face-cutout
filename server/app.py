@@ -224,6 +224,7 @@ async def api_status():
         "detection": ModelStatus.READY if any(loaded.values()) else ModelStatus.LOADING,
         "inpaint": inpaint,
         "inpaint_detail": inpaint_detail,
+        "device": settings.DEVICE,
     })
 
 

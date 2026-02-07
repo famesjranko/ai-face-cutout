@@ -119,7 +119,7 @@ class StableDiffusionInpainter(BaseInpainter):
             pipe.enable_attention_slicing()
 
         _SHARED_PIPE = pipe
-        logger.info("Inpainting model loaded.")
+        logger.info("Inpainting model loaded. Device: %s", self.device)
 
     async def generate(
         self,

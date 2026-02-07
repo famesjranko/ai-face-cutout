@@ -103,7 +103,7 @@ The GPU override file (`docker-compose.gpu.yml`) sets `DEVICE=cuda`, builds PyTo
 
 Once the container is running, check the logs for:
 ```
-Device: cuda
+Inpainting model loaded. Device: cuda
 ```
 
 Or call the status endpoint:
