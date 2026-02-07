@@ -12,3 +12,6 @@ weights/bisenet_face_parsing.pth
 
 # Local scripts
 scripts/ralph/
+
+# Claude Code
+CLAUDE.md
