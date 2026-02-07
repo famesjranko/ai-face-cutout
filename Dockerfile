@@ -9,10 +9,11 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-# Install CPU-only PyTorch first (big layer, cache it)
+# Install PyTorch (CPU by default; GPU compose override sets TORCH_VARIANT=cu124)
+ARG TORCH_VARIANT=cpu
 RUN pip install --no-cache-dir \
     torch torchvision \
-    --extra-index-url https://download.pytorch.org/whl/cpu
+    --extra-index-url https://download.pytorch.org/whl/${TORCH_VARIANT}
 
 # Install remaining deps
 COPY requirements-web.txt .

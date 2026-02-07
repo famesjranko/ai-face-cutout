@@ -100,9 +100,10 @@ class StableDiffusionInpainter(BaseInpainter):
             "Loading inpainting model: %s (this may take a while on first run)...",
             self.model_id,
         )
+        use_fp16 = self.device == "cuda"
         pipe = StableDiffusionInpaintPipeline.from_pretrained(
             self.model_id,
-            torch_dtype=torch.float32,
+            torch_dtype=torch.float16 if use_fp16 else torch.float32,
             safety_checker=None,
         )
 
@@ -118,7 +119,7 @@ class StableDiffusionInpainter(BaseInpainter):
             pipe.enable_attention_slicing()
 
         _SHARED_PIPE = pipe
-        logger.info("Inpainting model loaded.")
+        logger.info("Inpainting model loaded. Device: %s", self.device)
 
     async def generate(
         self,

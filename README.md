@@ -43,7 +43,7 @@ Browser                              Docker Container
   - *Object mode*: YOLOv8-seg instance segmentation (person, car, dog, etc.)
 - **Inpainting**: Stable Diffusion (`runwayml/stable-diffusion-inpainting`) with DPMSolver at 8 steps, run in a forked child process for instant cancellation
 - **Aspect ratio**: Webcam frames are resized preserving aspect ratio and padded with white (which becomes extra inpaint area for SD)
-- **CPU-only**: No GPU required (generation takes ~30-90s on CPU)
+- **CPU or GPU**: Runs on CPU by default (~30-90s per generation); optional NVIDIA GPU support brings this down to ~3-5s
 
 ## Configuration
 
@@ -59,7 +59,58 @@ Environment variables (set in `docker-compose.yml`):
 | `INPAINT_MODEL` | `runwayml/stable-diffusion-inpainting` | HuggingFace model ID |
 | `INPAINT_STEPS` | `8` | Inference steps (more = better quality, slower) |
 | `GUIDANCE_SCALE` | `7.5` | Prompt adherence strength |
-| `DEVICE` | `cpu` | `cpu` or `cuda` |
+| `DEVICE` | `cpu` | `cpu` or `cuda` (set automatically by GPU compose override) |
+
+## GPU Support
+
+By default the app runs on CPU. If you have an NVIDIA GPU, you can enable GPU acceleration for much faster inpainting (~3-5s vs ~30-90s).
+
+### Prerequisites
+
+- NVIDIA GPU with up-to-date drivers (`nvidia-smi` should work)
+- [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) installed and configured
+
+<details>
+<summary>NVIDIA Container Toolkit install (Ubuntu/Debian)</summary>
+
+```bash
+# Add the NVIDIA container toolkit repository
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
+  sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+
+# Install
+sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
+
+# Configure Docker and restart
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+```
+
+</details>
+
+### Running with GPU
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+```
+
+The GPU override file (`docker-compose.gpu.yml`) sets `DEVICE=cuda`, builds PyTorch with CUDA support, and reserves the GPU for the container.
+
+### Verify GPU is active
+
+Once the container is running, check the logs for:
+```
+Inpainting model loaded. Device: cuda
+```
+
+Or call the status endpoint:
+```bash
+curl -s http://localhost:8000/api/status | python -m json.tool
+# Look for "device": "cuda" or check that generation takes ~3-5s
+```
 
 ## Project Structure
 
