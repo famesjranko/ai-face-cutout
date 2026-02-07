@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from server.config import settings
-from server.detectors import FaceBiSeNetDetector, YOLOv8SegDetector, BaseDetector
+from server.detectors import BaseDetector, create_detector
 from server.enums import DetectionMode, ModelStatus
 from server.masking import create_mask_preview
 from server.inpainting import InpaintingEngine
@@ -78,35 +78,19 @@ def _prewarm_face_detector():
 def get_detector_sync(mode: str, target_classes=None) -> BaseDetector:
     """Get or create a detector by mode name (thread-safe, lazy-loading)."""
     with state.detector_lock:
-        if mode == DetectionMode.FACE:
-            if DetectionMode.FACE not in state.detectors:
-                det = FaceBiSeNetDetector(
-                    yolo_weights=settings.WEIGHTS_PATH,
-                    bisenet_weights=settings.BISENET_WEIGHTS_PATH,
-                    device=settings.DEVICE,
-                    img_size=settings.IMG_SIZE,
-                )
-                det.load()
-                state.detectors[DetectionMode.FACE] = det
-            return state.detectors[DetectionMode.FACE]
-
-        elif mode == DetectionMode.OBJECT:
-            if DetectionMode.OBJECT not in state.detectors:
-                det = YOLOv8SegDetector(
-                    model_variant=settings.YOLOV8_SEG_MODEL,
-                    device=settings.DEVICE,
-                    target_classes=target_classes or [0],
-                )
-                det.load()
-                state.detectors[DetectionMode.OBJECT] = det
-            else:
-                # Update target classes if the detector already exists.
-                if target_classes is not None:
-                    state.detectors[DetectionMode.OBJECT].set_target_classes(target_classes)
-            return state.detectors[DetectionMode.OBJECT]
-
+        if mode not in state.detectors:
+            extra = {}
+            if target_classes is not None:
+                extra["target_classes"] = target_classes
+            det = create_detector(mode, settings=settings, **extra)
+            det.load()
+            state.detectors[mode] = det
         else:
-            raise ValueError(f"Unknown detection mode: {mode}")
+            # Update target classes if the detector supports it.
+            det = state.detectors[mode]
+            if target_classes is not None and hasattr(det, "set_target_classes"):
+                det.set_target_classes(target_classes)
+        return state.detectors[mode]
 
 
 @asynccontextmanager

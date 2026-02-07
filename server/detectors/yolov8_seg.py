@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 
 from server.detectors.base import BaseDetector, DetectionResult
+from server.enums import DetectionMode
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,10 @@ class YOLOv8SegDetector(BaseDetector):
         self._model = None
 
     # -- BaseDetector interface ------------------------------------------------
+
+    @staticmethod
+    def detection_mode() -> str:
+        return DetectionMode.OBJECT
 
     @property
     def name(self) -> str:
